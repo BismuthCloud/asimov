@@ -6,7 +6,7 @@ from asimov.graph.tasks import Task, TaskStatus
 from .mock_redis import MockRedisCache
 from pprint import pprint
 
-from asimov.agents.graph_agent import (
+from asimov.graph.graph import (
     Agent,
     Node,
     AgentModule,
@@ -128,7 +128,7 @@ async def test_dependency_resolution(simple_agent, mock_cache):
     task = Task(type="test", objective="Test dependency resolution", params={})
     await simple_agent.run_task(task)
 
-    result = mock_cache.get_message(simple_agent.output_mailbox)
+    result = await mock_cache.get_message(simple_agent.output_mailbox)
     assert result["status"] == TaskStatus.COMPLETE
     assert len(result["result"]) == 4  # 4 node results
     assert "Executed A" in str(result["result"]["NodeA"])
@@ -184,7 +184,7 @@ async def test_parallel_execution(simple_agent, mock_cache):
     await simple_agent.run_task(task)
     end_time = asyncio.get_event_loop().time()
 
-    result = mock_cache.get_message(simple_agent.output_mailbox)
+    result = await mock_cache.get_message(simple_agent.output_mailbox)
     assert result["status"] == TaskStatus.COMPLETE
     assert len(result["result"]) == 3  # 3 node results
     assert (
@@ -250,8 +250,8 @@ async def test_error_handling(simple_agent, mock_cache):
     task = Task(type="test", objective="Test error handling", params={})
     await simple_agent.run_task(task)
 
-    result = mock_cache.get_message(simple_agent.output_mailbox)
-    error = mock_cache.get_message(simple_agent.error_mailbox)
+    result = await mock_cache.get_message(simple_agent.output_mailbox)
+    error = await mock_cache.get_message(simple_agent.error_mailbox)
 
     assert result["status"] == TaskStatus.PARTIAL
     assert "NodeB" in result["failed_chains"][0]
@@ -277,7 +277,7 @@ async def test_parallel_mailbox_communication(simple_agent, mock_cache):
 
             messages = []
             for mailbox in self.input_mailboxes:
-                message = cache.peek_mailbox(mailbox)[0]
+                message = (await cache.peek_mailbox(mailbox))[0]
                 if message:
                     messages.append(message)
 
@@ -356,7 +356,7 @@ async def test_parallel_mailbox_communication(simple_agent, mock_cache):
     task = Task(type="test", objective="Test parallel mailbox communication", params={})
     await simple_agent.run_task(task)
 
-    result = mock_cache.get_message(simple_agent.output_mailbox)
+    result = await mock_cache.get_message(simple_agent.output_mailbox)
     assert result["status"] == TaskStatus.COMPLETE
     assert len(result["result"]) == 4  # A, B1, B2, C results
     assert "Sent message from A" in str(result["result"]["NodeA"])
@@ -376,7 +376,7 @@ async def test_cross_graph_communication(simple_agent, mock_cache):
         ) -> Dict[str, Any]:
             received_messages = []
             for mailbox in self.input_mailboxes:
-                message = cache.peek_mailbox(mailbox)[0]
+                message = (await cache.peek_mailbox(mailbox))[0]
                 if message:
                     received_messages.append(message)
 
@@ -455,7 +455,7 @@ async def test_cross_graph_communication(simple_agent, mock_cache):
     task = Task(type="test", objective="Test cross-graph communication", params={})
     await simple_agent.run_task(task)
 
-    result = mock_cache.get_message(simple_agent.output_mailbox)
+    result = await mock_cache.get_message(simple_agent.output_mailbox)
     assert result["status"] == TaskStatus.COMPLETE
     assert len(result["result"]) == 4  # A1, A2, B1, B2 results
     assert "Processed in A1: " in str(result["result"]["NodeA1"])
@@ -513,7 +513,7 @@ async def test_flow_control(simple_agent, mock_cache):
     task = Task(type="test", objective="Test objective", params={})
     await simple_agent.run_task(task)
 
-    result = mock_cache.get_message(simple_agent.output_mailbox)
+    result = await mock_cache.get_message(simple_agent.output_mailbox)
     assert result["status"] == TaskStatus.COMPLETE
     assert "Node_1" in result["result"]
     print(result["result"])
@@ -538,8 +538,8 @@ async def test_module_timeout(simple_agent, mock_cache):
     task = Task(type="test", objective="Test objective", params={})
     await simple_agent.run_task(task)
 
-    result = mock_cache.get_message(simple_agent.output_mailbox)
-    error = mock_cache.get_message(simple_agent.error_mailbox)
+    result = await mock_cache.get_message(simple_agent.output_mailbox)
+    error = await mock_cache.get_message(simple_agent.error_mailbox)
 
     print(result)
 
@@ -555,7 +555,9 @@ async def test_complex_graph_construction_and_execution(simple_agent, mock_cache
         ) -> Dict[str, Any]:
             await asyncio.sleep(0.1)  # Simulate some work
             if self.input_mailboxes:
-                messages = [cache.peek_mailbox(mb)[0] for mb in self.input_mailboxes]
+                messages = [
+                    (await cache.peek_mailbox(mb))[0] for mb in self.input_mailboxes
+                ]
                 result = (
                     f"Processed in {self.name}: {', '.join(filter(None, messages))}"
                 )
@@ -652,7 +654,7 @@ async def test_complex_graph_construction_and_execution(simple_agent, mock_cache
     )
     await simple_agent.run_task(task)
 
-    result = mock_cache.get_message(simple_agent.output_mailbox)
+    result = await mock_cache.get_message(simple_agent.output_mailbox)
 
     assert result["status"] == TaskStatus.COMPLETE
     assert len(result["result"]) == 5  # 5 node results
@@ -733,7 +735,7 @@ async def test_caching_results(simple_agent, mock_cache):
     task = Task(type="test", objective="Test caching results", params={})
     await simple_agent.run_task(task)
 
-    result = mock_cache.get_message(simple_agent.output_mailbox)
+    result = await mock_cache.get_message(simple_agent.output_mailbox)
     assert "NodeA" in result["result"]
     assert "NodeB" in result["result"]
     assert "NodeC" not in result["result"]
@@ -777,7 +779,7 @@ async def test_run_task_simple(simple_agent, mock_cache):
     task = Task(type="test", objective="Test objective", params={})
     await simple_agent.run_task(task)
 
-    result = mock_cache.get_message(simple_agent.output_mailbox)
+    result = await mock_cache.get_message(simple_agent.output_mailbox)
     assert result["status"] == TaskStatus.COMPLETE
     assert result["result"]["NodeA"]["results"][0]["result"] == "test"
 
@@ -825,8 +827,8 @@ async def test_run_task_max_visits(simple_agent, mock_cache):
     task = Task(type="test", objective="Test objective", params={})
     await simple_agent.run_task(task)
 
-    result = mock_cache.get_message(simple_agent.output_mailbox)
-    error = mock_cache.get_message(simple_agent.error_mailbox)
+    result = await mock_cache.get_message(simple_agent.output_mailbox)
+    error = await mock_cache.get_message(simple_agent.error_mailbox)
 
     assert result["status"] == TaskStatus.FAILED
 
@@ -858,7 +860,7 @@ async def test_concurrency_control(simple_agent, mock_cache):
     await simple_agent.run_task(task)
     end_time = asyncio.get_event_loop().time()
 
-    result = mock_cache.get_message(simple_agent.output_mailbox)
+    result = await mock_cache.get_message(simple_agent.output_mailbox)
     assert result["status"] == TaskStatus.COMPLETE
     assert len(result["result"]) == 5  # 5 module results
     print(end_time - start_time)
@@ -874,7 +876,7 @@ async def test_mailbox_communication(simple_agent, mock_cache):
             self, cache: Cache, semaphore: asyncio.Semaphore
         ) -> Dict[str, Any]:
             for mailbox in self.input_mailboxes:
-                message = cache.get_message(mailbox)
+                message = await cache.get_message(mailbox)
                 if message:
                     result = f"Processed {message} in {self.name}"
                     if self.output_mailbox:
@@ -940,10 +942,12 @@ async def test_mailbox_communication(simple_agent, mock_cache):
 
     print("Output mailbox:", simple_agent.output_mailbox)
     print("Error mailbox:", simple_agent.error_mailbox)
-    print("All data:", mock_cache.get_all())
-    print("Mailbox content:", mock_cache.peek_mailbox(simple_agent.output_mailbox))
+    print("All data:", await mock_cache.get_all())
+    print(
+        "Mailbox content:", await mock_cache.peek_mailbox(simple_agent.output_mailbox)
+    )
 
-    result = mock_cache.get_message(simple_agent.output_mailbox)
+    result = await mock_cache.get_message(simple_agent.output_mailbox)
     print("Result:", result)
 
     assert result is not None, "No message in output mailbox"
@@ -1124,7 +1128,7 @@ async def test_complex_graph_execution(simple_agent, mock_cache):
     task = Task(type="test", objective="Test complex graph execution", params={})
     await simple_agent.run_task(task)
 
-    result = mock_cache.get_message(simple_agent.output_mailbox)
+    result = await mock_cache.get_message(simple_agent.output_mailbox)
     assert result is not None
     assert result["status"] == TaskStatus.COMPLETE
 
@@ -1150,14 +1154,14 @@ async def test_complex_graph_execution(simple_agent, mock_cache):
     assert "FinalNode" in result["result"], "FinalNode should have been executed"
 
     # Check for any error messages
-    error_messages = mock_cache.get_message(simple_agent.error_mailbox)
+    error_messages = await mock_cache.get_message(simple_agent.error_mailbox)
     assert error_messages is None, f"Unexpected errors: {error_messages}"
 
     # Verify final node execution
     assert result["result"]["FinalNode"]["results"][0]["status"] == "success"
 
     # Check for any error messages
-    error_messages = mock_cache.get_message(simple_agent.error_mailbox)
+    error_messages = await mock_cache.get_message(simple_agent.error_mailbox)
     assert error_messages is None, f"Unexpected errors: {error_messages}"
 
     # Verify dynamic node creation
@@ -1170,7 +1174,7 @@ async def test_complex_graph_execution(simple_agent, mock_cache):
     assert "FinalNode" in result["result"], "FinalNode should have been executed"
 
     # Check for any error messages
-    error_messages = mock_cache.get_message(simple_agent.error_mailbox)
+    error_messages = await mock_cache.get_message(simple_agent.error_mailbox)
     assert error_messages is None, f"Unexpected errors: {error_messages}"
 
 

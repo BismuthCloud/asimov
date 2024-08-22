@@ -105,15 +105,15 @@ class AgentModule(AsimovBase):
     async def setup_mailboxes(self, cache: Cache):
         for mailbox in self.input_mailboxes:
             try:
-                cache.create_mailbox(mailbox)
+                await cache.create_mailbox(mailbox)
             except Exception as e:
                 # Handle case where mailbox already exists
                 pass
-            cache.subscribe_to_mailbox(mailbox)
+            await cache.subscribe_to_mailbox(mailbox)
 
         if self.output_mailbox:
             try:
-                cache.create_mailbox(self.output_mailbox)
+                await cache.create_mailbox(self.output_mailbox)
             except Exception as e:
                 # Handle case where mailbox already exists
                 pass
@@ -176,7 +176,12 @@ class FlowControlModule(AgentModule):
 
     async def _apply_cache_affixes_condition(self, condition: str, cache: Cache):
         parts = condition.split(" ")
-        keys = [k.split(cache.affix_sep)[1] for k in await cache.keys()]
+
+        try:
+            keys = [k.split(cache.affix_sep)[1] for k in await cache.keys()]
+        except IndexError:
+            print("No affixes, returning raw keys.")
+            keys = await cache.keys()
 
         new_parts = []
 
