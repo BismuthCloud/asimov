@@ -9,7 +9,6 @@ from abc import ABC, abstractmethod
 import boto3
 from botocore.config import Config
 import httpx
-from opentelemetry import trace
 
 
 class ChatRole(Enum):

@@ -22,10 +22,13 @@ classifiers = [
 ]
 dependencies = [
   "gitpython>=3.1.0,<4.0.0",
-  "opentelemetry-api>=1.11.0,<2.0.0",
   "httpx>=0.23.0,<1.0.0",
   "boto3>=1.26.0,<2.0.0",
   "pydantic>=2.0.0",
+  "psycopg2-binary>=2.9.0",
+  "lupa==2.2.0",
+  "jsonpickle>=3.0.0",
+  "redis>=5.0.0",
 ]
 
 [project.optional-dependencies]
@@ -44,7 +47,7 @@ Issues = "https://github.com/BismuthCloud/asimov/issues"
 Source = "https://github.com/BismuthCloud/asimov"
 
 [tool.hatch.version]
-path = "lib/__init__.py"
+path = "asimov/__init__.py"
 
 [tool.hatch.envs.default]
 dependencies = [
@@ -52,7 +55,7 @@ dependencies = [
   "pytest-cov",
 ]
 [tool.hatch.envs.default.scripts]
-cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=lib --cov=tests {args}"
+cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=asimov --cov=tests {args}"
 no-cov = "cov --no-cov {args}"
 
 [[tool.hatch.envs.test.matrix]]
@@ -62,7 +65,7 @@ python = ["311", "312"]
 branch = true
 parallel = true
 omit = [
-  "lib/__init__.py"
+  "asimov/__init__.py"
 ]
 
 [tool.coverage.report]
@@ -73,7 +76,7 @@ exclude_lines = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["lib/"]
+packages = ["asimov/"]
 
 [tool.hatch.build.targets.sdist]
 exclude = [

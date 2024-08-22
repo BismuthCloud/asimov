@@ -5,7 +5,7 @@ from typing import Dict, Any, Set
 from pydantic import model_validator, PrivateAttr
 import threading
 
-from lib.caches.cache import Cache
+from asimov.caches.cache import Cache
 
 
 def lock_factory():

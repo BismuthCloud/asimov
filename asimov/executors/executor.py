@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
-from lib.agents.graph_agent import AgentModule, ModuleConfig, ModuleType
+from asimov.agents.graph_agent import AgentModule, ModuleConfig, ModuleType
 from typing import Any, Dict
-from lib.caches.cache import Cache
+from asimov.caches.cache import Cache
 from pydantic import Field
 import asyncio
 

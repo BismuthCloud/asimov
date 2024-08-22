@@ -15,10 +15,10 @@ from collections import defaultdict
 import uuid
 from pprint import pprint
 
-from lib.graph.tasks import Task, TaskStatus
-from lib.caches.cache import Cache
-from lib.asimov_base import AsimovBase
-from lib.caches.redis_cache import RedisCache
+from asimov.graph.tasks import Task, TaskStatus
+from asimov.caches.cache import Cache
+from asimov.asimov_base import AsimovBase
+from asimov.caches.redis_cache import RedisCache
 from contextlib import suppress
 
 lua = LuaRuntime(unpack_returned_tuples=True)

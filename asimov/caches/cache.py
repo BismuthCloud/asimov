@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Callable, Dict, Any, Set, Optional, List
 from pydantic import ConfigDict, Field, PrivateAttr
-from lib.asimov_base import AsimovBase
+from asimov.asimov_base import AsimovBase
 from contextlib import asynccontextmanager
 import jsonpickle
 import asyncio

@@ -1,10 +1,10 @@
 import asyncio
 from collections import defaultdict
-from lib.caches.cache import Cache
+from asimov.caches.cache import Cache
 from pydantic import Field
 from typing import Any, DefaultDict, Optional, Dict
 from queue import Queue, Empty
-from lib.caches.cache import Cache  # Assuming Cache is defined in your project
+from asimov.caches.cache import Cache  # Assuming Cache is defined in your project
 from pydantic import Field, field_validator
 from typing import Any, DefaultDict, Optional, Dict
 

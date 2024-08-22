@@ -3,7 +3,7 @@
 from enum import Enum
 from uuid import uuid4, UUID
 from typing import Dict, Any, Optional
-from lib.asimov_base import AsimovBase
+from asimov.asimov_base import AsimovBase
 from pydantic import ConfigDict, Field
 
 
