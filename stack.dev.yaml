@@ -1,0 +1,20 @@
+version: v1.0.0
+kind: stack
+name: "Asimov Dev"
+description: ""
+namespace: "asimov-dev"
+release: "dev"
+services:
+  redis_1:
+    service: "redis"
+    values:
+      cluster:
+        enable: false
+      master:
+        service:
+          type: NodePort
+      auth:
+        password: "abcd1234"
+    repository: "oci://registry-1.docker.io/bitnamicharts"
+    chart: "redis"
+    expedient: true

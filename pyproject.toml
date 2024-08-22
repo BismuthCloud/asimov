@@ -1,0 +1,76 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "asimov-agents"
+dynamic = ["version"]
+description = "A library of primitives for building agentic flows."
+readme = "README.md"
+requires-python = ">=3.12"
+license = ""
+keywords = ["git", "agent", "bismuth", "ai"]
+authors = [
+  { name = "Ian Butler", email = "ian@bismuth.cloud" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+]
+dependencies = [
+  "gitpython>=3.1.0,<4.0.0",
+  "opentelemetry-api>=1.11.0,<2.0.0",
+  "httpx>=0.23.0,<1.0.0",
+  "boto3>=1.26.0,<2.0.0",
+  "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "black>=23.1.0",
+  "mypy>=1.0.0",
+  "pytest>=7.0.0",
+  "pytest-cov>=4.0.0",
+]
+
+[tool.hatch.version]
+path = "lib/__init__.py"
+
+[tool.hatch.envs.default]
+dependencies = [
+  "pytest",
+  "pytest-cov",
+]
+[tool.hatch.envs.default.scripts]
+cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=lib --cov=tests {args}"
+no-cov = "cov --no-cov {args}"
+
+[[tool.hatch.envs.test.matrix]]
+python = ["311", "312"]
+
+[tool.coverage.run]
+branch = true
+parallel = true
+omit = [
+  "lib/__init__.py"
+]
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["lib/"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "/.github",
+  "/docs",
+  "/tests",
+]
