@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "A library of primitives for building agentic flows."
 readme = "README.md"
 requires-python = ">=3.12"
-license = ""
+license = "Apache-2.0"
 keywords = ["git", "agent", "bismuth", "ai"]
 authors = [
   { name = "Ian Butler", email = "ian@bismuth.cloud" },
@@ -35,6 +35,13 @@ dev = [
   "pytest>=7.0.0",
   "pytest-cov>=4.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/BismuthCloud/asimov"
+URL = "https://github.com/BismuthCloud/asimov"
+Documentation = "https://github.com/BismuthCloud/asimov"
+Issues = "https://github.com/BismuthCloud/asimov/issues"
+Source = "https://github.com/BismuthCloud/asimov"
 
 [tool.hatch.version]
 path = "lib/__init__.py"
