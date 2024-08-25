@@ -300,22 +300,26 @@ class Node(CompositeModule):
     def subgraph_default_type_factory():
         return ModuleType.SUBGRAPH
 
+    _nodes: Dict[str, "Node"] = PrivateAttr()
     modules: List[AgentModule] = Field(default_factory=list)
     node_config: NodeConfig = Field(default_factory=NodeConfig)
     type: ModuleType = Field(default_factory=subgraph_default_type_factory)
     dependencies: List[str] = Field(default_factory=list)
 
+    def set_nodes(self, nodes: Dict[str, "Node"]):
+        self._nodes = nodes
+
+    def get_nodes(self):
+        return self._nodes
+
     async def cancel_gen(self, agen):
-        task = asyncio.create_task(agen.__anext__())
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
         await agen.aclose()
 
     async def cleanup(self):
         for module in self.modules:
             if module._generator:
                 await self.cancel_gen(module._generator)
+
                 module._generator = None
 
 
@@ -395,6 +399,8 @@ class Agent(AsimovBase):
     def add_node(self, node: AgentModule):
         self.nodes[node.name] = node
         self.graph[node.name] = list(node.dependencies)
+
+        node.set_nodes(self.nodes)
 
     def add_multiple_nodes(self, nodes: List[AgentModule]):
         for node in nodes:
@@ -521,16 +527,15 @@ class Agent(AsimovBase):
                                         new_nodes_added = True
                                 elif "decision" in module_result:
                                     next_node = module_result["decision"]
-                                    print(
-                                        "DECISION", next_node, module_result["metadata"]
-                                    )
                                     if module_result["cleanup"]:
+                                        # TODO This probably isn't entirely correct so look into it.
                                         for step in self.execution_state.current_plan:
+                                            if next_node in step["nodes"]:
+                                                await self.nodes[next_node].cleanup()
+                                                break
+
                                             for node in step["nodes"]:
                                                 await self.nodes[node].cleanup()
-
-                                            if node_name in step["nodes"]:
-                                                break
 
                                     if (
                                         next_node is not None
