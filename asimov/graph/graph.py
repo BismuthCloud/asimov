@@ -521,7 +521,9 @@ class Agent(AsimovBase):
                                         new_nodes_added = True
                                 elif "decision" in module_result:
                                     next_node = module_result["decision"]
-                                    print("DECISION", next_node)
+                                    print(
+                                        "DECISION", next_node, module_result["metadata"]
+                                    )
                                     if module_result["cleanup"]:
                                         for step in self.execution_state.current_plan:
                                             for node in step["nodes"]:
