@@ -65,12 +65,16 @@ class RedisCache(Cache):
 
     async def clear(self):
         with self._lock:
-            all_keys = self.client.keys("*")
+            context = await self._get_current_context()
+            prefix = await self.get_prefix(context)
+            all_keys = self.client.keys(f"{prefix}{self.affix_sep}*")
             if all_keys:
                 self.client.delete(*all_keys)
 
     async def get_all(self) -> Dict[str, Any]:
-        all_keys = self.client.keys("*")
+        context = await self._get_current_context()
+        prefix = await self.get_prefix(context)
+        all_keys = self.client.keys(f"{prefix}{self.affix_sep}*")
         result = {}
         for key in all_keys:
             value = await self.get(key.decode("utf-8"), raw=True)
