@@ -1,10 +1,9 @@
 from abc import ABC, abstractmethod
-from typing import Callable, Dict, Any, Set, Optional, List
+from contextvars import ContextVar
+from typing import Dict, Any, Set, Optional
 from pydantic import ConfigDict, Field, PrivateAttr
 from asimov.asimov_base import AsimovBase
 from contextlib import asynccontextmanager
-import jsonpickle
-import asyncio
 
 
 class Cache(AsimovBase, ABC):
@@ -13,40 +12,23 @@ class Cache(AsimovBase, ABC):
     default_prefix: str = Field(default="")
     default_suffix: str = Field(default="")
     affix_sep: str = ":"
-    _task_context_stacks: Dict[asyncio.Task, List[str]] = PrivateAttr(
-        default_factory=dict
-    )
-    DEFAULT_CONTEXT: str = "__default__"
-    _context_lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
+    _prefix: ContextVar[str]
+    _suffix: ContextVar[str]
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._prefix = ContextVar("prefix", default=self.default_prefix)
+        self._suffix = ContextVar("suffix", default=self.default_suffix)
 
-    async def _get_current_context(self) -> str:
-        async with self._context_lock:
-            task = asyncio.current_task()
-            stack = self._task_context_stacks.get(task, [])
-            return stack[-1] if stack else self.DEFAULT_CONTEXT
+    async def get_prefix(self) -> str:
+        return self._prefix.get()
 
-    async def get_prefix(self, context: Optional[str] = None) -> str:
-        if context is None:
-            context = await self._get_current_context()
-        return await self.get(
-            f"{self.default_prefix}{self.affix_sep}{context}{self.affix_sep}prefix",
-            self.default_prefix,
-            raw=True,
-        )
-
-    async def get_suffix(self, context: Optional[str] = None) -> str:
-        if context is None:
-            context = await self._get_current_context()
-        return await self.get(
-            f"{self.default_prefix}{self.affix_sep}{context}{self.affix_sep}suffix",
-            self.default_suffix,
-            raw=True,
-        )
+    async def get_suffix(self) -> str:
+        return self._suffix.get()
 
     async def apply_key_modifications(self, key: str) -> str:
-        context = await self._get_current_context()
-        prefix = await self.get_prefix(context)
-        suffix = await self.get_suffix(context)
+        prefix = await self.get_prefix()
+        suffix = await self.get_suffix()
 
         if prefix:
             key = f"{prefix}{self.affix_sep}{key}"
@@ -55,75 +37,22 @@ class Cache(AsimovBase, ABC):
         return key
 
     @asynccontextmanager
-    async def with_context(self, context: str):
-        async with self._context_lock:
-            task = asyncio.current_task()
-            if task not in self._task_context_stacks:
-                self._task_context_stacks[task] = []
-            self._task_context_stacks[task].append(context)
+    async def with_prefix(self, prefix: str):
+        old_prefix = await self.get_prefix()
+        self._prefix.set(prefix)
         try:
             yield self
         finally:
-            async with self._context_lock:
-                self._task_context_stacks[task].pop()
-                if not self._task_context_stacks[task]:
-                    del self._task_context_stacks[task]
+            self._prefix.set(old_prefix)
 
     @asynccontextmanager
-    async def with_prefix(self, prefix: str, context: Optional[str] = None):
-        if context is not None:
-            async with self.with_context(context):
-                async with self._with_prefix_internal(prefix):
-                    yield self
-        else:
-            async with self._with_prefix_internal(prefix):
-                yield self
-
-    @asynccontextmanager
-    async def _with_prefix_internal(self, prefix: str):
-        context = await self._get_current_context()
-        old_prefix = await self.get_prefix(context)
-        await self.set(
-            f"{self.default_prefix}{self.affix_sep}{context}{self.affix_sep}prefix",
-            prefix,
-            raw=True,
-        )
+    async def with_suffix(self, suffix: str):
+        old_suffix = await self.get_suffix()
+        self._suffix.set(suffix)
         try:
             yield self
         finally:
-            await self.set(
-                f"{self.default_prefix}{self.affix_sep}{context}{self.affix_sep}prefix",
-                old_prefix,
-                raw=True,
-            )
-
-    @asynccontextmanager
-    async def with_suffix(self, suffix: str, context: Optional[str] = None):
-        if context is not None:
-            async with self.with_context(context):
-                async with self._with_suffix_internal(suffix):
-                    yield self
-        else:
-            async with self._with_suffix_internal(suffix):
-                yield self
-
-    @asynccontextmanager
-    async def _with_suffix_internal(self, suffix: str):
-        context = await self._get_current_context()
-        old_suffix = await self.get_suffix(context)
-        await self.set(
-            f"{self.default_prefix}{self.affix_sep}{context}{self.affix_sep}suffix",
-            suffix,
-            raw=True,
-        )
-        try:
-            yield self
-        finally:
-            await self.set(
-                f"{self.default_prefix}{self.affix_sep}{context}{self.affix_sep}suffix",
-                old_suffix,
-                raw=True,
-            )
+            self._suffix.set(old_suffix)
 
     def __getitem__(self, key: str):
         return self.get(key)

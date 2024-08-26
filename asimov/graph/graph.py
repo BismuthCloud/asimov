@@ -212,7 +212,6 @@ class FlowControlModule(AgentModule):
                 lua_globals[lua_safe_key] = await cache.get(orig_var)
 
         modified_condition = await self._apply_cache_affixes_condition(condition, cache, cache_keys)
-        print(modified_condition)
         return lua.eval(modified_condition)
 
 
