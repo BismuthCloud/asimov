@@ -195,12 +195,14 @@ class AnthropicInferenceClient(InferenceClient):
         self.api_url = api_url
         self.api_key = api_key
 
-    async def connect_and_listen(self, messages: List[ChatMessage]):
+    async def connect_and_listen(
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5
+    ):
         request = {
             "model": self.model,
             "system": messages[0]["content"],
-            "top_p": 0.5,
-            "max_tokens": 4096,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
             "messages": [
                 {"role": msg["role"], "content": msg["content"]} for msg in messages[1:]
             ],
