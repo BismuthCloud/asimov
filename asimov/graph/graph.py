@@ -1,5 +1,6 @@
 import asyncio
 from enum import Enum
+import re
 from typing import List, Dict, Any, AsyncGenerator, Optional, Union, TypedDict, Tuple
 from pydantic import (
     ConfigDict,
@@ -142,9 +143,12 @@ class FlowControlModule(AgentModule):
     flow_config: FlowControlConfig
 
     async def run(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
+        # Get keys once
+        cache_keys = await cache.keys()
+
         for decision in self.flow_config.decisions:
             if decision.condition:
-                if await self.evaluate_condition(decision.condition, cache):
+                if await self.evaluate_condition(decision.condition, cache, cache_keys):
                     # Unset variables used in the condition
                     for var in decision.condition_variables:
                         await cache.delete(var)
@@ -174,14 +178,14 @@ class FlowControlModule(AgentModule):
             "metadata": {},
         }
 
-    async def _apply_cache_affixes_condition(self, condition: str, cache: Cache):
+    async def _apply_cache_affixes_condition(self, condition: str, cache: Cache, cache_keys: set[str]) -> str:
         parts = condition.split(" ")
 
         try:
-            keys = [k.split(cache.affix_sep)[1] for k in await cache.keys()]
+            keys = {k.split(cache.affix_sep)[1] for k in cache_keys}
         except IndexError:
             print("No affixes, returning raw keys.")
-            keys = await cache.keys()
+            keys = cache_keys
 
         new_parts = []
 
@@ -196,23 +200,20 @@ class FlowControlModule(AgentModule):
 
         return " ".join(new_parts)
 
-    async def evaluate_condition(self, condition: str, cache: Cache) -> bool:
+    async def evaluate_condition(self, condition: str, cache: Cache, cache_keys: set[str]) -> bool:
+        # TODO: these are never cleaned up
         lua_globals = lua.globals()
-        for key, value in (await cache.get_all()).items():
-            if key == await cache.apply_key_modifications("request_id"):
-                continue
+        
+        lua_vars = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', condition)
+        for orig_var in lua_vars:
+            renamed_var = await cache.apply_key_modifications(orig_var)
+            if renamed_var in cache_keys:
+                lua_safe_key = "v_" + renamed_var.replace(cache.affix_sep, "_")
+                lua_globals[lua_safe_key] = await cache.get(orig_var)
 
-            lua_safe_key = "v_" + key.replace(
-                cache.affix_sep, "_"
-            )  # Replace colons with underscores
-
-            lua_globals[lua_safe_key] = value
-
-        modified_condition = await self._apply_cache_affixes_condition(condition, cache)
-
-        x = lua.eval(modified_condition)
-
-        return x
+        modified_condition = await self._apply_cache_affixes_condition(condition, cache, cache_keys)
+        print(modified_condition)
+        return lua.eval(modified_condition)
 
 
 class CompositeModule(AgentModule):

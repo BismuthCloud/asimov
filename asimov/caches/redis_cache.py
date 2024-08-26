@@ -1,15 +1,10 @@
-import redis
+import redis.asyncio as redis
 import json
 import jsonpickle
 from typing import Dict, Any, Set
-from pydantic import model_validator, PrivateAttr
-import threading
+from pydantic import model_validator
 
 from asimov.caches.cache import Cache
-
-
-def lock_factory():
-    return threading.Lock()
 
 
 class RedisCache(Cache):
@@ -19,7 +14,6 @@ class RedisCache(Cache):
     password: str | None = None
     client: redis.Redis | None = None
     pubsub: redis.client.PubSub | None = None
-    _lock: threading.Lock = PrivateAttr(default_factory=lock_factory)
 
     @model_validator(mode="after")
     def set_client(self):
@@ -33,22 +27,20 @@ class RedisCache(Cache):
         self.client = client
         self.pubsub = self.client.pubsub()
         return self
-
+    
     async def get_message(self, timeout=None):
-        with self._lock:
-            message = self.pubsub.get_message(timeout=timeout)
-            if message and message["type"] == "message":
-                return json.loads(message["data"])
+        message = await self.pubsub.get_message(timeout=timeout)
+        if message and message["type"] == "message":
+            return json.loads(message["data"])
         return None
 
     async def get(self, key: str, default=None, raw=False):
-
         modified_key = key
 
         if not raw:
             modified_key = await self.apply_key_modifications(key)
 
-        value = self.client.get(modified_key)
+        value = await self.client.get(modified_key)
         return jsonpickle.decode(value) if value else default
 
     async def set(self, key: str, value, raw: bool = False):
@@ -57,24 +49,23 @@ class RedisCache(Cache):
         if not raw:
             modified_key = await self.apply_key_modifications(key)
 
-        self.client.set(modified_key, jsonpickle.encode(value))
+        await self.client.set(modified_key, jsonpickle.encode(value))
 
     async def delete(self, key: str):
         modified_key = await self.apply_key_modifications(key)
-        self.client.delete(modified_key)
+        await self.client.delete(modified_key)
 
     async def clear(self):
-        with self._lock:
-            context = await self._get_current_context()
-            prefix = await self.get_prefix(context)
-            all_keys = self.client.keys(f"{prefix}{self.affix_sep}*")
-            if all_keys:
-                self.client.delete(*all_keys)
+        context = await self._get_current_context()
+        prefix = await self.get_prefix(context)
+        all_keys = await self.client.keys(f"{prefix}{self.affix_sep}*")
+        if all_keys:
+            await self.client.delete(*all_keys)
 
     async def get_all(self) -> Dict[str, Any]:
         context = await self._get_current_context()
         prefix = await self.get_prefix(context)
-        all_keys = self.client.keys(f"{prefix}{self.affix_sep}*")
+        all_keys = await self.client.keys(f"{prefix}{self.affix_sep}*")
         result = {}
         for key in all_keys:
             value = await self.get(key.decode("utf-8"), raw=True)
@@ -83,21 +74,19 @@ class RedisCache(Cache):
 
     async def create_mailbox(self, mailbox_id: str):
         modified_mailbox_id = await self.apply_key_modifications(mailbox_id)
-        self.client.publish(f"mailbox:{modified_mailbox_id}", "")
+        await self.client.publish(f"mailbox:{modified_mailbox_id}", "")
 
     async def publish_to_mailbox(self, mailbox_id: str, value):
         modified_mailbox_id = await self.apply_key_modifications(mailbox_id)
-        self.client.publish(f"mailbox:{modified_mailbox_id}", jsonpickle.encode(value))
+        await self.client.publish(f"mailbox:{modified_mailbox_id}", jsonpickle.encode(value))
 
     async def subscribe_to_mailbox(self, mailbox_id: str):
         modified_mailbox_id = await self.apply_key_modifications(mailbox_id)
-        with self._lock:
-            self.pubsub.subscribe(f"mailbox:{modified_mailbox_id}")
+        await self.pubsub.subscribe(f"mailbox:{modified_mailbox_id}")
 
     async def unsubscribe_from_mailbox(self, mailbox_id: str):
         modified_mailbox_id = await self.apply_key_modifications(mailbox_id)
-        with self._lock:
-            self.pubsub.unsubscribe(f"mailbox:{modified_mailbox_id}")
+        await self.pubsub.unsubscribe(f"mailbox:{modified_mailbox_id}")
 
     async def keys(self) -> Set[str]:
         keys: Set[str] = set()
@@ -115,7 +104,7 @@ class RedisCache(Cache):
             key_string = f"{key_string}{self.affix_sep}{suffix}"
 
         while True:
-            cursor, partial_keys = self.client.scan(
+            cursor, partial_keys = await self.client.scan(
                 cursor=cursor, match=key_string, count=1000
             )
 
@@ -126,8 +115,7 @@ class RedisCache(Cache):
         return keys
 
     async def close(self):
-        with self._lock:
-            if self.pubsub:
-                self.pubsub.close()
-            if self.client:
-                self.client.close()
+        if self.pubsub:
+            await self.pubsub.close()
+        if self.client:
+            await self.client.aclose()

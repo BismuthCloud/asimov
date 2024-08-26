@@ -9,6 +9,7 @@ import asyncio
 
 class Cache(AsimovBase, ABC):
     model_config = ConfigDict(arbitrary_types_allowed=True)
+    # TODO: this is treated more like a "namespace" - perhaps rename?
     default_prefix: str = Field(default="")
     default_suffix: str = Field(default="")
     affix_sep: str = ":"
