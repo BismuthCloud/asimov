@@ -215,7 +215,11 @@ class AnthropicInferenceClient(InferenceClient):
                 self.api_url,
                 timeout=300000,
                 json=request,
-                headers={"x-api-key": self.api_key, "anthropic-version": "2023-06-01"},
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "anthropic-beta": "prompt-caching-2024-07-31",
+                },
             ) as response:
                 print(response.status_code)
                 async for line in response.aiter_lines():
