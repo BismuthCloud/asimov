@@ -137,6 +137,7 @@ class FlowDecision(AsimovBase):
 class FlowControlConfig(AsimovBase):
     decisions: List[FlowDecision]
     default: Optional[str] = None
+    cleanup_on_default: bool = True
 
 
 class FlowControlModule(AgentModule):
@@ -170,13 +171,21 @@ class FlowControlModule(AgentModule):
                     "metadata": decision.metadata,
                 }
 
-        # If no decisions were met, fall through
-        return {
-            "status": "success",
-            "decision": None,  # Indicates fall-through
-            "cleanup": True,
-            "metadata": {},
-        }
+        if self.flow_config.default:
+            return {
+                "status": "success",
+                "decision": self.flow_config.default,
+                "cleanup": self.flow_config.cleanup_on_default,
+                "metadata": {},
+            }
+        else:
+            # If no decisions were met, fall through
+            return {
+                "status": "success",
+                "decision": None,  # Indicates fall-through
+                "cleanup": True,
+                "metadata": {},
+            }
 
     async def _apply_cache_affixes_condition(
         self, condition: str, cache: Cache, cache_keys: set[str]
@@ -532,6 +541,8 @@ class Agent(AsimovBase):
                                                         next_node
                                                     )
                                                 )
+
+                                                pprint(new_plan)
                                                 self.execution_state.current_plan = (
                                                     new_plan
                                                 )
