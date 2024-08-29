@@ -413,35 +413,13 @@ class Agent(AsimovBase):
         for node in nodes:
             self.add_node(node)
 
-    def _topological_sort(self, graph):
-        in_degree = {node: 0 for node in graph}
-        for node in graph:
-            for neighbor in graph[node]:
-                in_degree[neighbor] += 1
-
-        queue = [node for node in graph if in_degree[node] == 0]
-        result = []
-
-        while queue:
-            parallel_group = []
-            next_queue = []
-            for node in queue:
-                parallel_group.append(node)
-                for neighbor in graph[node]:
-                    in_degree[neighbor] -= 1
-                    if in_degree[neighbor] == 0:
-                        next_queue.append(neighbor)
-            result.append(parallel_group)
-            queue = next_queue
-
-        return list(reversed(result))
-
     async def run_task(self, task: Task) -> None:
         task.status = TaskStatus.EXECUTING
         self.task = task
         await self.cache.set("task", task)
 
         self.execution_state.current_plan = self.compile_execution_plan()
+        pprint(self.execution_state.current_plan)
         self.execution_state.execution_history.append(self.execution_state.current_plan)
 
         failed_chains = set()
