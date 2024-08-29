@@ -178,7 +178,9 @@ class FlowControlModule(AgentModule):
             "metadata": {},
         }
 
-    async def _apply_cache_affixes_condition(self, condition: str, cache: Cache, cache_keys: set[str]) -> str:
+    async def _apply_cache_affixes_condition(
+        self, condition: str, cache: Cache, cache_keys: set[str]
+    ) -> str:
         parts = condition.split(" ")
 
         try:
@@ -200,18 +202,22 @@ class FlowControlModule(AgentModule):
 
         return " ".join(new_parts)
 
-    async def evaluate_condition(self, condition: str, cache: Cache, cache_keys: set[str]) -> bool:
+    async def evaluate_condition(
+        self, condition: str, cache: Cache, cache_keys: set[str]
+    ) -> bool:
         # TODO: these are never cleaned up
         lua_globals = lua.globals()
-        
-        lua_vars = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', condition)
+
+        lua_vars = re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", condition)
         for orig_var in lua_vars:
             renamed_var = await cache.apply_key_modifications(orig_var)
             if renamed_var in cache_keys:
                 lua_safe_key = "v_" + renamed_var.replace(cache.affix_sep, "_")
                 lua_globals[lua_safe_key] = await cache.get(orig_var)
 
-        modified_condition = await self._apply_cache_affixes_condition(condition, cache, cache_keys)
+        modified_condition = await self._apply_cache_affixes_condition(
+            condition, cache, cache_keys
+        )
         return lua.eval(modified_condition)
 
 
@@ -326,6 +332,7 @@ class Node(CompositeModule):
 class ExecutionStep(TypedDict):
     executed: List[bool]
     nodes: List[str]
+    skipped: List[bool]
 
 
 ExecutionPlan = List[ExecutionStep]
@@ -713,6 +720,55 @@ class Agent(AsimovBase):
                 return execution_plan[index:]
         return execution_plan  # or return an empty list if the node isn't found
 
+    def mark_node_and_deps_as_skipped(self, node_name: str):
+        for step in self.execution_state.current_plan:
+            if node_name in step["nodes"]:
+                index = step["nodes"].index(node_name)
+                step["skipped"][index] = True
+
+                # Mark all dependencies as skipped
+                deps_to_skip = set(self.get_dependent_chains(node_name))
+                for dep_step in self.execution_state.current_plan:
+                    for i, dep_node in enumerate(dep_step["nodes"]):
+                        if dep_node in deps_to_skip:
+                            dep_step["skipped"][i] = True
+
+                break
+
+    def _topological_sort(self, graph):
+        visited = set()
+        stack = []
+
+        def dfs(node):
+            if node in visited:
+                return
+            visited.add(node)
+            for neighbor in graph.get(node, []):
+                dfs(neighbor)
+            stack.append(node)
+
+        for node in graph:
+            if node not in visited:
+                dfs(node)
+
+        # Reverse the stack to get the correct topological order
+        stack.reverse()
+
+        # Group nodes that can be executed in parallel
+        result = []
+        while stack:
+            parallel_group = []
+            next_stack = []
+            for node in stack:
+                if all(dep not in stack for dep in graph.get(node, [])):
+                    parallel_group.append(node)
+                else:
+                    next_stack.append(node)
+            result.append(parallel_group)
+            stack = next_stack
+
+        return result
+
     def compile_execution_plan(self) -> ExecutionPlan:
         plan = self._topological_sort(self.graph)
         return [
@@ -735,15 +791,25 @@ class Agent(AsimovBase):
 
         # Mark nodes as skipped in the new plan
         for step_index, step in enumerate(new_plan):
-            for _node_index, node in enumerate(step["nodes"]):
-                if node == start_node:
-                    # We've found the start node, mark all previous nodes as skipped
-                    for prev_step in new_plan[:step_index]:
-                        prev_step["skipped"] = [True] * len(prev_step["nodes"])
-                    # Mark other nodes in this step as skipped
-                    step["skipped"] = [node != start_node for node in step["nodes"]]
-                    # No need to process further steps
-                    return new_plan
+            if start_node in step["nodes"]:
+                # We've found the start node
+                # Mark all previous nodes as skipped
+                for prev_step in new_plan[:step_index]:
+                    prev_step["skipped"] = [True] * len(prev_step["nodes"])
+
+                # Mark siblings in this parallel group as skipped
+                for i, node in enumerate(step["nodes"]):
+                    if node != start_node:
+                        step["skipped"][i] = True
+                        # Mark all dependents of this sibling as skipped
+                        dependents = self.get_dependent_chains(node)
+                        for future_step in new_plan[step_index + 1 :]:
+                            for j, future_node in enumerate(future_step["nodes"]):
+                                if future_node in dependents:
+                                    future_step["skipped"][j] = True
+
+                # No need to process further steps
+                return new_plan
 
         return new_plan
 
