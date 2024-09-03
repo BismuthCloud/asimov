@@ -115,6 +115,10 @@ class InferenceClient(ABC):
     async def connect_and_listen(self, messages: List[ChatMessage]):
         pass
 
+    @abstractmethod
+    async def get_generation(self, messages: List[ChatMessage]):
+        pass
+
 
 class BedrockInferenceClient(InferenceClient):
     def __init__(self, model: str):
@@ -127,6 +131,9 @@ class BedrockInferenceClient(InferenceClient):
         self.model_family = ModelFamily.Anthropic
         self.anthropic_version = "bedrock-2023-05-31"
         self.mixtral_protocol = MixtralMessageProtocol()
+
+    def get_generation(self, messages: List[ChatMessage]):
+        pass
 
     async def connect_and_listen(
         self,
@@ -195,6 +202,36 @@ class AnthropicInferenceClient(InferenceClient):
         self.api_url = api_url
         self.api_key = api_key
 
+    async def get_generation(
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5
+    ):
+        request = {
+            "model": self.model,
+            "system": messages[0]["content"],
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+            "messages": [
+                {"role": msg["role"], "content": msg["content"]} for msg in messages[1:]
+            ],
+            "stream": False,
+        }
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                self.api_url,
+                timeout=300000,
+                json=request,
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "anthropic-beta": "prompt-caching-2024-07-31",
+                },
+            )
+
+            if response.status_code != 200:
+                response.raise_for_status()
+
+            return response.json()["content"][0]["text"]
+
     async def connect_and_listen(
         self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5
     ):
@@ -222,7 +259,14 @@ class AnthropicInferenceClient(InferenceClient):
                 },
             ) as response:
                 print(response.status_code)
+                from pprint import pprint
+
                 async for line in response.aiter_lines():
+                    if response.status_code != 200:
+                        message_logs = [{"role": msg["role"]} for msg in messages[1:]]
+
+                        pprint(message_logs)
+
                     if line.startswith("data: "):
                         data = json.loads(line[6:])
                         chunk_type = data["type"]

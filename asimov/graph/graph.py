@@ -542,7 +542,6 @@ class Agent(AsimovBase):
                                                     )
                                                 )
 
-                                                pprint(new_plan)
                                                 self.execution_state.current_plan = (
                                                     new_plan
                                                 )
