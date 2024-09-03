@@ -413,6 +413,8 @@ class Agent(AsimovBase):
         return result["status"] == "success"
 
     def add_node(self, node: AgentModule):
+        if node.name in self.nodes:
+            raise ValueError(f"Node with name {node.name} already exists")
         self.nodes[node.name] = node
         self.graph[node.name] = list(node.dependencies)
 

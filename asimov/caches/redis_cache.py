@@ -6,6 +6,9 @@ from typing import Dict, Any, Set
 from asimov.caches.cache import Cache
 
 
+RAISE_ON_NONE = object()
+
+
 class RedisCache(Cache):
     host: str = "localhost"
     port: int = 6379
@@ -13,7 +16,7 @@ class RedisCache(Cache):
     password: str | None = None
     _client: redis.Redis
     _pubsub: redis.client.PubSub
-    
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._client = redis.Redis(
@@ -23,21 +26,23 @@ class RedisCache(Cache):
             password=self.password,
         )
         self._pubsub = self._client.pubsub()
-    
+
     async def get_message(self, timeout=None):
         message = await self._pubsub.get_message(timeout=timeout)
         if message and message["type"] == "message":
             return json.loads(message["data"])
         return None
 
-    async def get(self, key: str, default=None, raw=False):
+    async def get(self, key: str, default=RAISE_ON_NONE, raw=False):
         modified_key = key
 
         if not raw:
             modified_key = await self.apply_key_modifications(key)
 
         value = await self._client.get(modified_key)
-        return jsonpickle.decode(value) if value else default
+        if value is None and default is RAISE_ON_NONE:
+            raise KeyError(key)
+        return jsonpickle.decode(value) if value is not None else default
 
     async def set(self, key: str, value, raw: bool = False):
         modified_key = key
@@ -72,7 +77,9 @@ class RedisCache(Cache):
 
     async def publish_to_mailbox(self, mailbox_id: str, value):
         modified_mailbox_id = await self.apply_key_modifications(mailbox_id)
-        await self._client.publish(f"mailbox:{modified_mailbox_id}", jsonpickle.encode(value))
+        await self._client.publish(
+            f"mailbox:{modified_mailbox_id}", jsonpickle.encode(value)
+        )
 
     async def subscribe_to_mailbox(self, mailbox_id: str):
         modified_mailbox_id = await self.apply_key_modifications(mailbox_id)

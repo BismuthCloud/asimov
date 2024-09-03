@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from contextvars import ContextVar
 from typing import Dict, Any, Set, Optional
-from pydantic import ConfigDict, Field, PrivateAttr
+from pydantic import ConfigDict, Field
 from asimov.asimov_base import AsimovBase
 from contextlib import asynccontextmanager
 
@@ -14,7 +14,7 @@ class Cache(AsimovBase, ABC):
     affix_sep: str = ":"
     _prefix: ContextVar[str]
     _suffix: ContextVar[str]
-    
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._prefix = ContextVar("prefix", default=self.default_prefix)

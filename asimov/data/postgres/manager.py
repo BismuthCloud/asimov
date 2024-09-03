@@ -51,7 +51,9 @@ class DatabaseManager:
     def execute_query(self, query, params=None):
         with self.get_cursor() as cursor:
             cursor.execute(query, params)
-            return cursor.fetchall()
+            if cursor.description:
+                return cursor.fetchall()
+            return None
 
     def execute_and_fetch_one(self, query, params=None):
         with self.get_cursor() as cursor:

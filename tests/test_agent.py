@@ -1,11 +1,11 @@
 import pytest
 import asyncio
-from typing import Dict, Any, List, AsyncGenerator
+from typing import Dict, Any, AsyncGenerator
 from pydantic import Field
 from asimov.graph.tasks import Task, TaskStatus
-from .mock_redis import MockRedisCache
 from pprint import pprint
 
+from asimov.caches.mock_redis_cache import MockRedisCache
 from asimov.graph.graph import (
     Agent,
     Node,

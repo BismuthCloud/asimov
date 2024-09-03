@@ -1,12 +1,10 @@
-import asyncio
 from collections import defaultdict
 from asimov.caches.cache import Cache
 from pydantic import Field
-from typing import Any, DefaultDict, Optional, Dict, Set
-from queue import Queue, Empty
-from asimov.caches.cache import Cache  # Assuming Cache is defined in your project
+from typing import Any, Optional, Dict, Set
+from queue import Queue
+from asimov.caches.cache import Cache
 from pydantic import Field, field_validator
-from typing import Any, DefaultDict, Optional, Dict
 
 
 def create_queue() -> Queue:
@@ -31,21 +29,34 @@ class MockRedisCache(Cache):
     async def get(
         self, key: str, default: Any = None, raw: bool = False
     ) -> Optional[Any]:
-        return self.data.get(key)
+        modified_key = key
+
+        if not raw:
+            modified_key = await self.apply_key_modifications(key)
+
+        return self.data.get(modified_key, default)
 
     async def get_all(self) -> Dict[str, Any]:
-        return self.data
+        prefix = await self.get_prefix()
+        return {k: v for k, v in self.data.items() if k.startswith(prefix)}
 
     async def set(self, key: str, value: Any, raw: bool = False) -> None:
-        self.data[key] = value
+        modified_key = key
+
+        if not raw:
+            modified_key = await self.apply_key_modifications(key)
+
+        self.data[modified_key] = value
 
     async def delete(self, key: str) -> None:
-        self.data.pop(key, None)
+        modified_key = key
+        self.data.pop(modified_key, None)
 
-    async def clear(self, prefix: str) -> None:
+    async def clear(self) -> None:
+        prefix = await self.get_prefix()
         keys_to_delete = [key for key in self.data if key.startswith(prefix)]
         for key in keys_to_delete:
-            self.delete(key)
+            await self.delete(key)
 
     async def create_mailbox(self, mailbox_id: str) -> None:
         # No-op for this mock implementation
@@ -80,7 +91,11 @@ class MockRedisCache(Cache):
             del self.mailboxes[mailbox_id]
 
     async def keys(self) -> Set[str]:
-        return set(self.data.keys())
+        prefix = await self.get_prefix()
+        suffix = await self.get_suffix()
+        return set(
+            k for k in self.data.keys() if k.startswith(prefix) and k.endswith(suffix)
+        )
 
     async def close(self) -> None:
         # No-op for this mock implementation
