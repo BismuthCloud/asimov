@@ -265,6 +265,7 @@ class AnthropicInferenceClient(InferenceClient):
                     if response.status_code != 200:
                         message_logs = [{"role": msg["role"]} for msg in messages[1:]]
 
+                        print(line)
                         pprint(message_logs)
 
                     if line.startswith("data: "):

@@ -8,19 +8,22 @@ import psycopg2.pool
 
 
 class DatabaseManager:
-    _instance = None
+    _instances = {}
     _lock = Lock()
     _initialized = False
 
     def __new__(cls, dsn: str):
         with cls._lock:
-            if cls._instance is None:
-                cls._instance = super(DatabaseManager, cls).__new__(cls)
-        return cls._instance
+            if cls._instances.get(dsn) is None:
+                cls._instances[dsn] = {
+                    "instance": super(DatabaseManager, cls).__new__(cls),
+                    "initialized": False,
+                }
+        return cls._instances[dsn]["instance"]
 
     def __init__(self, dsn: str):
-        if not DatabaseManager._initialized:
-            DatabaseManager._instance.initialize(dsn)
+        if not DatabaseManager._instances[dsn]["initialized"]:
+            DatabaseManager._instances[dsn]["instance"].initialize(dsn)
 
     def initialize(self, dsn: str = ""):
         self.connection_pool = psycopg2.pool.ThreadedConnectionPool(
@@ -28,7 +31,8 @@ class DatabaseManager:
             maxconn=20,  # Adjust based on your needs
             dsn=dsn,
         )
-        DatabaseManager._initialized = True
+
+        DatabaseManager._instances[dsn]["initialized"] = True
 
     @contextlib.contextmanager
     def get_connection(self):
