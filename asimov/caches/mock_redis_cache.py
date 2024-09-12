@@ -5,10 +5,14 @@ from typing import Any, Optional, Dict, Set
 from queue import Queue
 from asimov.caches.cache import Cache
 from pydantic import Field, field_validator
+import copy
 
 
 def create_queue() -> Queue:
     return Queue()
+
+
+RAISE_ON_NONE = object()
 
 
 class MockRedisCache(Cache):
@@ -27,14 +31,17 @@ class MockRedisCache(Cache):
         self.data = {}
 
     async def get(
-        self, key: str, default: Any = None, raw: bool = False
+        self, key: str, default: Any = RAISE_ON_NONE, raw: bool = False
     ) -> Optional[Any]:
         modified_key = key
 
         if not raw:
             modified_key = await self.apply_key_modifications(key)
 
-        return self.data.get(modified_key, default)
+        out = self.data.get(modified_key, default)
+        if out is RAISE_ON_NONE:
+            raise KeyError(key)
+        return copy.deepcopy(out)
 
     async def get_all(self) -> Dict[str, Any]:
         prefix = await self.get_prefix()
@@ -68,9 +75,10 @@ class MockRedisCache(Cache):
     async def peek_message(self, mailbox_id: str) -> str:
         return list(self.mailboxes[mailbox_id].queue)[-1]
 
-    async def get_message(self, mailbox: str):
-        if not self.mailboxes[mailbox].empty():
-            return self.mailboxes[mailbox].get_nowait()
+    async def get_message(self, timeout=None):
+        for mailbox in self.mailboxes.values():
+            if not mailbox.empty():
+                return mailbox.get_nowait()
         return None
 
     async def publish_to_mailbox(self, mailbox: str, message: Any):

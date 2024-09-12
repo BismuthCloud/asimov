@@ -90,6 +90,10 @@ class Cache(AsimovBase, ABC):
         pass
 
     @abstractmethod
+    async def get_message(self, timeout=None):
+        pass
+
+    @abstractmethod
     async def unsubscribe_from_mailbox(self, mailbox_id: str):
         pass
 
