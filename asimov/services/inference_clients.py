@@ -18,67 +18,14 @@ class ChatRole(Enum):
 
 
 class ChatMessage:
-    def __init__(self, content: str, role: ChatRole):
+    content: str
+    role: ChatRole
+    cache_marker: bool
+
+    def __init__(self, content: str, role: ChatRole, cache_marker: bool = False):
         self.content = content
         self.role = role
-
-
-@dataclass
-class ParticipantMessageProtocol:
-    open: str
-    close: str
-
-
-class ModelMessageProtocol(ABC):
-    @property
-    @abstractmethod
-    def system_message_protocol(self) -> ParticipantMessageProtocol:
-        pass
-
-    @property
-    @abstractmethod
-    def user_message_protocol(self) -> ParticipantMessageProtocol:
-        pass
-
-    @property
-    @abstractmethod
-    def ai_message_protocol(self) -> ParticipantMessageProtocol:
-        pass
-
-    def apply_protocol(self, message: ChatMessage) -> str:
-        if message.role == ChatRole.SYSTEM:
-            protocol = self.system_message_protocol
-        elif message.role == ChatRole.USER:
-            protocol = self.user_message_protocol
-        elif message.role == ChatRole.ASSISTANT:
-            protocol = self.ai_message_protocol
-        else:
-            raise ValueError("Invalid role")
-
-        return protocol.open + message.content + protocol.close
-
-
-class MixtralMessageProtocol(ModelMessageProtocol):
-    @property
-    def system_message_protocol(self) -> ParticipantMessageProtocol:
-        return ParticipantMessageProtocol(open="<s>[INST]", close="[/INST]")
-
-    @property
-    def user_message_protocol(self) -> ParticipantMessageProtocol:
-        return ParticipantMessageProtocol(open="<s>[INST]", close="[/INST]")
-
-    @property
-    def ai_message_protocol(self) -> ParticipantMessageProtocol:
-        return ParticipantMessageProtocol(open="", close="</s>")
-
-
-@dataclass
-class MistralRequest:
-    prompt: str
-    max_tokens: int = 512
-    temperature: float = 0.5
-    top_p: float = 0.9
-    top_k: int = 50
+        self.cache_marker = cache_marker
 
 
 @dataclass
@@ -106,17 +53,19 @@ class AnthropicMessage:
 
 class ModelFamily(Enum):
     Anthropic = "Anthropic"
-    OpenAI = "OpenAI"
-    Mistral = "Mistral"
 
 
 class InferenceClient(ABC):
     @abstractmethod
-    async def connect_and_listen(self, messages: List[ChatMessage]):
+    async def connect_and_listen(
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5
+    ):
         pass
 
     @abstractmethod
-    async def get_generation(self, messages: List[ChatMessage]):
+    async def get_generation(
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5
+    ):
         pass
 
 
@@ -126,40 +75,54 @@ class BedrockInferenceClient(InferenceClient):
         self.bedrock_runtime = boto3.client(
             service_name="bedrock-runtime",
             region_name="us-east-1",
-            config=Config(retries={"max_attempts": 10, "mode": "standard"}),
+            config=Config(retries={"max_attempts": 3, "mode": "standard"}),
         )
         self.model_family = ModelFamily.Anthropic
         self.anthropic_version = "bedrock-2023-05-31"
-        self.mixtral_protocol = MixtralMessageProtocol()
 
-    def get_generation(self, messages: List[ChatMessage]):
-        pass
+    async def get_generation(
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5
+    ):
+        body = AnthropicRequest(
+            anthropic_version=self.anthropic_version,
+            system=messages[0]["content"],
+            top_p=top_p,
+            max_tokens=max_tokens,
+            messages=[
+                {
+                    "role": msg["role"],
+                    "content": [{"type": "text", "text": msg["content"]}],
+                }
+                for msg in messages[1:]
+            ],
+        )
+
+        response = self.bedrock_runtime.invoke_model(
+            body=json.dumps(body.__dict__),
+            modelId=self.model,
+            contentType="application/json",
+            accept="application/json",
+        )
+
+        body = json.loads(response["body"].read())
+        return body["content"][0]["text"]
 
     async def connect_and_listen(
-        self,
-        messages: List[ChatMessage],
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5
     ):
-        if self.model_family == ModelFamily.Mistral:
-            protocol_applied = "".join(
-                [self.mixtral_protocol.apply_protocol(msg) for msg in messages]
-            )
-            body = MistralRequest(
-                prompt=protocol_applied, max_tokens=2048, temperature=0.1
-            )
-        else:
-            body = AnthropicRequest(
-                anthropic_version=self.anthropic_version,
-                system=messages[0].content,
-                top_p=0.5,
-                max_tokens=8192,
-                messages=[
-                    {
-                        "role": msg.role.value,
-                        "content": [{"type": "text", "text": msg.content}],
-                    }
-                    for msg in messages[1:]
-                ],
-            )
+        body = AnthropicRequest(
+            anthropic_version=self.anthropic_version,
+            system=messages[0]["content"],
+            top_p=top_p,
+            max_tokens=max_tokens,
+            messages=[
+                {
+                    "role": msg["role"],
+                    "content": [{"type": "text", "text": msg["content"]}],
+                }
+                for msg in messages[1:]
+            ],
+        )
 
         response = self.bedrock_runtime.invoke_model_with_response_stream(
             body=json.dumps(body.__dict__),
@@ -207,11 +170,24 @@ class AnthropicInferenceClient(InferenceClient):
     ):
         request = {
             "model": self.model,
-            "system": messages[0]["content"],
+            "system": [
+                {"type": "text", "text": messages[0]["content"]}
+                | (
+                    {"cache_control": {"type": "ephemeral"}}
+                    if messages[0].get("cache_marker")
+                    else {}
+                )
+            ],
             "top_p": top_p,
             "max_tokens": max_tokens,
             "messages": [
-                {"role": msg["role"], "content": msg["content"]} for msg in messages[1:]
+                {"role": msg["role"], "content": msg["content"]}
+                | (
+                    {"cache_control": {"type": "ephemeral"}}
+                    if msg.get("cache_marker")
+                    else {}
+                )
+                for msg in messages[1:]
             ],
             "stream": False,
         }
@@ -237,11 +213,29 @@ class AnthropicInferenceClient(InferenceClient):
     ):
         request = {
             "model": self.model,
-            "system": messages[0]["content"],
+            "system": [
+                {"type": "text", "text": messages[0]["content"]}
+                | (
+                    {"cache_control": {"type": "ephemeral"}}
+                    if messages[0].get("cache_marker")
+                    else {}
+                )
+            ],
             "top_p": top_p,
             "max_tokens": max_tokens,
             "messages": [
-                {"role": msg["role"], "content": msg["content"]} for msg in messages[1:]
+                {
+                    "role": msg["role"],
+                    "content": [
+                        {"type": "text", "text": msg["content"]}
+                        | (
+                            {"cache_control": {"type": "ephemeral"}}
+                            if msg.get("cache_marker")
+                            else {}
+                        )
+                    ],
+                }
+                for msg in messages[1:]
             ],
             "stream": True,
         }
@@ -258,7 +252,7 @@ class AnthropicInferenceClient(InferenceClient):
                     "anthropic-beta": "prompt-caching-2024-07-31",
                 },
             ) as response:
-                print(response.status_code)
+                print("streaming status code:", response.status_code)
                 from pprint import pprint
 
                 async for line in response.aiter_lines():
@@ -273,13 +267,15 @@ class AnthropicInferenceClient(InferenceClient):
                         chunk_type = data["type"]
 
                         if chunk_type in [
-                            "message_start",
                             "content_block_start",
                             "message_delta",
                             "error",
                             "message_stop",
                         ]:
                             text = ""
+                        elif chunk_type == "message_start":
+                            text = ""
+                            print(data["message"]["usage"])
                         elif chunk_type == "content_block_delta":
                             content_type = data["delta"]["type"]
                             text = (
