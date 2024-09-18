@@ -1,6 +1,7 @@
 import asyncio
 from enum import Enum
 import re
+import logging
 from typing import List, Dict, Any, AsyncGenerator, Optional, Union, TypedDict, Tuple
 from pydantic import (
     ConfigDict,
@@ -402,10 +403,12 @@ class Agent(AsimovBase):
     error_mailbox: str = "agent_error"
     execution_state: ExecutionState = Field(default_factory=ExecutionState)
     model_config = ConfigDict(arbitrary_types_allowed=True)
+    _logger: logging.Logger
 
     @model_validator(mode="after")
     def set_semaphore(self):
         self._semaphore = asyncio.Semaphore(self.max_concurrent_tasks)
+        self._logger = logging.getLogger(__name__)
 
         return self
 
@@ -442,6 +445,7 @@ class Agent(AsimovBase):
             ):
                 self.execution_state.total_iterations += 1
                 if self.execution_state.total_iterations > self.max_total_iterations:
+                    self._logger.warning(f"Graph execution exceeded maximum total iterations ({self.max_total_iterations})")
                     await self.cache.publish_to_mailbox(
                         self.error_mailbox,
                         {
@@ -449,7 +453,18 @@ class Agent(AsimovBase):
                             "error": f"Graph execution exceeded maximum total iterations ({self.max_total_iterations})",
                         },
                     )
-                    break
+
+                    task.status = TaskStatus.FAILED
+                    await self.cache.publish_to_mailbox(
+                        self.output_mailbox,
+                        {
+                            "status": TaskStatus.FAILED,
+                            "failed_chains": list(failed_chains),
+                            "result": self.node_results,
+                        },
+                    )
+
+                    return
 
                 parallel_group = self.execution_state.current_plan[
                     self.execution_state.execution_index
@@ -472,6 +487,7 @@ class Agent(AsimovBase):
                             and node_visit_count[node_name]
                             > self.nodes[node_name].node_config.max_visits
                         ):
+                            self._logger.warning(f"Node {node_name} exceeded maximum visits ({self.nodes[node_name].node_config.max_visits})")
                             await self.cache.publish_to_mailbox(
                                 self.error_mailbox,
                                 {
@@ -495,6 +511,7 @@ class Agent(AsimovBase):
                     if not self.is_success(result):
                         dependent_chain = self.get_dependent_chains(node_name)
                         failed_chains.add(dependent_chain)
+                        self._logger.warning(f"Node '{node_name}' error '{result}'")
                         await self.cache.publish_to_mailbox(
                             self.error_mailbox,
                             {
@@ -553,6 +570,7 @@ class Agent(AsimovBase):
                                                 )
                                                 flow_control_executed = True
                                             else:
+                                                self._logger.warning(f"Flow control attempted to jump to failed node: {next_node}")
                                                 await self.cache.publish_to_mailbox(
                                                     self.error_mailbox,
                                                     {
@@ -566,6 +584,7 @@ class Agent(AsimovBase):
                                                 )
                                                 break
                                         else:
+                                            self._logger.warning(f"Invalid next node: {next_node}")
                                             await self.cache.publish_to_mailbox(
                                                 self.error_mailbox,
                                                 {

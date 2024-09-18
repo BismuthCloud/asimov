@@ -6,8 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from abc import ABC, abstractmethod
 
-import boto3
-from botocore.config import Config
+import aioboto3
 import httpx
 
 
@@ -72,11 +71,7 @@ class InferenceClient(ABC):
 class BedrockInferenceClient(InferenceClient):
     def __init__(self, model: str):
         self.model = model
-        self.bedrock_runtime = boto3.client(
-            service_name="bedrock-runtime",
-            region_name="us-east-1",
-            config=Config(retries={"max_attempts": 3, "mode": "standard"}),
-        )
+        self.session = aioboto3.Session()
         self.model_family = ModelFamily.Anthropic
         self.anthropic_version = "bedrock-2023-05-31"
 
@@ -97,15 +92,19 @@ class BedrockInferenceClient(InferenceClient):
             ],
         )
 
-        response = self.bedrock_runtime.invoke_model(
-            body=json.dumps(body.__dict__),
-            modelId=self.model,
-            contentType="application/json",
-            accept="application/json",
-        )
+        async with self.session.client(
+            service_name="bedrock-runtime",
+            region_name="us-east-1",
+            ) as client:
+            response = await client.invoke_model(
+                body=json.dumps(body.__dict__),
+                modelId=self.model,
+                contentType="application/json",
+                accept="application/json",
+            )
 
-        body = json.loads(response["body"].read())
-        return body["content"][0]["text"]
+            body = json.loads(await response["body"].read())
+            return body["content"][0]["text"]
 
     async def connect_and_listen(
         self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5
@@ -124,34 +123,38 @@ class BedrockInferenceClient(InferenceClient):
             ],
         )
 
-        response = self.bedrock_runtime.invoke_model_with_response_stream(
-            body=json.dumps(body.__dict__),
-            modelId=self.model,
-            contentType="application/json",
-            accept="application/json",
-        )
+        async with self.session.client(
+            service_name="bedrock-runtime",
+            region_name="us-east-1",
+            ) as client:
+            response = await client.invoke_model_with_response_stream(
+                body=json.dumps(body.__dict__),
+                modelId=self.model,
+                contentType="application/json",
+                accept="application/json",
+            )
 
-        for chunk in response["body"]:
-            chunk_json = json.loads(chunk["chunk"]["bytes"].decode())
-            chunk_type = chunk_json["type"]
+            async for chunk in response["body"]:
+                chunk_json = json.loads(chunk["chunk"]["bytes"].decode())
+                chunk_type = chunk_json["type"]
 
-            if chunk_type in [
-                "message_start",
-                "content_block_start",
-                "message_delta",
-                "error",
-                "message_stop",
-            ]:
-                text = ""
-            elif chunk_type == "content_block_delta":
-                content_type = chunk_json["delta"]["type"]
-                text = (
-                    chunk_json["delta"]["text"] if content_type == "text_delta" else ""
-                )
-            else:
-                text = ""
+                if chunk_type in [
+                    "message_start",
+                    "content_block_start",
+                    "message_delta",
+                    "error",
+                    "message_stop",
+                ]:
+                    text = ""
+                elif chunk_type == "content_block_delta":
+                    content_type = chunk_json["delta"]["type"]
+                    text = (
+                        chunk_json["delta"]["text"] if content_type == "text_delta" else ""
+                    )
+                else:
+                    text = ""
 
-            yield text
+                yield text
 
 
 class AnthropicInferenceClient(InferenceClient):
