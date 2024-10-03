@@ -301,6 +301,13 @@ class OAIRequest:
     stream: bool = False
 
 
+@dataclass
+class OAIReasoningRequest:
+    model: str
+    messages: List[Dict[str, Any]]
+    max_tokens: int = 4096
+
+
 class OAIInferenceClient(InferenceClient):
     def __init__(
         self,
@@ -315,20 +322,26 @@ class OAIInferenceClient(InferenceClient):
     async def get_generation(
         self, messages: List[ChatMessage], max_tokens=4096, top_p=1.0
     ):
-        request = OAIRequest(
-            model=self.model,
-            messages=[
-                {"role": msg.role.value, "content": msg.content} for msg in messages
-            ],
-            max_tokens=max_tokens,
-            top_p=top_p,
-            stream=False,
-        )
+        if self.model in ["o1-preview", "o1-mini"]:
+            print("REASONING_REQUEST")
+            request = {
+                "model": self.model,
+                "messages": messages,
+            }
+        else:
+            request = OAIRequest(
+                model=self.model,
+                messages=messages,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                stream=False,
+            )
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 self.api_url,
-                json=request.__dict__,
+                json=request,
+                timeout=300000,
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
