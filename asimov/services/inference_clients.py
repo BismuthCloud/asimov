@@ -1,5 +1,3 @@
-# BISMUTH FILE: inference_clients.py
-
 import json
 from typing import List, Dict, Any, Callable, AsyncGenerator
 from dataclasses import dataclass
@@ -95,7 +93,7 @@ class BedrockInferenceClient(InferenceClient):
         async with self.session.client(
             service_name="bedrock-runtime",
             region_name="us-east-1",
-            ) as client:
+        ) as client:
             response = await client.invoke_model(
                 body=json.dumps(body.__dict__),
                 modelId=self.model,
@@ -126,7 +124,7 @@ class BedrockInferenceClient(InferenceClient):
         async with self.session.client(
             service_name="bedrock-runtime",
             region_name="us-east-1",
-            ) as client:
+        ) as client:
             response = await client.invoke_model_with_response_stream(
                 body=json.dumps(body.__dict__),
                 modelId=self.model,
@@ -149,7 +147,9 @@ class BedrockInferenceClient(InferenceClient):
                 elif chunk_type == "content_block_delta":
                     content_type = chunk_json["delta"]["type"]
                     text = (
-                        chunk_json["delta"]["text"] if content_type == "text_delta" else ""
+                        chunk_json["delta"]["text"]
+                        if content_type == "text_delta"
+                        else ""
                     )
                 else:
                     text = ""
@@ -289,3 +289,87 @@ class AnthropicInferenceClient(InferenceClient):
                         else:
                             text = ""
                         yield text
+
+
+@dataclass
+class OAIRequest:
+    model: str
+    messages: List[Dict[str, Any]]
+    max_tokens: int = 4096
+    temperature: float = 1.0
+    top_p: float = 1.0
+    stream: bool = False
+
+
+class OAIInferenceClient(InferenceClient):
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        api_url: str = "https://api.openai.com/v1/chat/completions",
+    ):
+        self.model = model
+        self.api_url = api_url
+        self.api_key = api_key
+
+    async def get_generation(
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=1.0
+    ):
+        request = OAIRequest(
+            model=self.model,
+            messages=[
+                {"role": msg.role.value, "content": msg.content} for msg in messages
+            ],
+            max_tokens=max_tokens,
+            top_p=top_p,
+            stream=False,
+        )
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                self.api_url,
+                json=request.__dict__,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+
+            if response.status_code != 200:
+                response.raise_for_status()
+
+            return response.json()["choices"][0]["message"]["content"]
+
+    async def connect_and_listen(
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=1.0
+    ):
+        request = OAIRequest(
+            model=self.model,
+            messages=[
+                {"role": msg.role.value, "content": msg.content} for msg in messages
+            ],
+            max_tokens=max_tokens,
+            top_p=top_p,
+            stream=True,
+        )
+
+        async with httpx.AsyncClient() as client:
+            async with client.stream(
+                "POST",
+                self.api_url,
+                json=request.__dict__,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+            ) as response:
+                if response.status_code != 200:
+                    response.raise_for_status()
+
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        if line.strip() == "data: [DONE]":
+                            break
+                        data = json.loads(line[6:])
+                        if data["choices"][0]["delta"].get("content"):
+                            yield data["choices"][0]["delta"]["content"]
