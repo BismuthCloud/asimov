@@ -335,13 +335,13 @@ class OAIInferenceClient(InferenceClient):
                 max_tokens=max_tokens,
                 top_p=top_p,
                 stream=False,
-            )
+            ).__dict__
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 self.api_url,
                 json=request,
-                timeout=300000,
+                timeout=180,
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
@@ -359,7 +359,7 @@ class OAIInferenceClient(InferenceClient):
         request = OAIRequest(
             model=self.model,
             messages=[
-                {"role": msg.role.value, "content": msg.content} for msg in messages
+                {"role": msg["role"], "content": msg["content"]} for msg in messages
             ],
             max_tokens=max_tokens,
             top_p=top_p,
@@ -375,6 +375,7 @@ class OAIInferenceClient(InferenceClient):
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
                 },
+                timeout=180,
             ) as response:
                 if response.status_code != 200:
                     response.raise_for_status()
