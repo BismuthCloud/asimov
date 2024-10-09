@@ -1,5 +1,9 @@
 import asyncio
 from enum import Enum
+import jsonpickle
+import os
+import pathlib
+import pickle
 import re
 import logging
 from typing import List, Dict, Any, AsyncGenerator, Optional, Union, TypedDict, Tuple
@@ -312,6 +316,12 @@ class CompositeModule(AgentModule):
                 }
 
 
+class SnapshotControl(Enum):
+    NEVER = "never"
+    ONCE = "once"
+    ALWAYS = "always"
+
+
 class Node(CompositeModule):
     def subgraph_default_type_factory():
         return ModuleType.SUBGRAPH
@@ -321,6 +331,7 @@ class Node(CompositeModule):
     node_config: NodeConfig = Field(default_factory=NodeConfig)
     type: ModuleType = Field(default_factory=subgraph_default_type_factory)
     dependencies: List[str] = Field(default_factory=list)
+    snapshot: SnapshotControl = SnapshotControl.NEVER
 
     def set_nodes(self, nodes: Dict[str, "Node"]):
         self._nodes = nodes
@@ -354,13 +365,6 @@ class ExecutionState(AsimovBase):
     execution_history: List[ExecutionPlan] = Field(default_factory=list)
     total_iterations: int = Field(default=0)
 
-
-class ExecutionState(AsimovBase):
-    execution_index: int = Field(default=0)
-    current_plan: ExecutionPlan = Field(default_factory=list)
-    execution_history: List[ExecutionPlan] = Field(default_factory=list)
-    total_iterations: int = Field(default=0)
-
     def mark_executed(self, step_index: int, node_index: int):
         if 0 <= step_index < len(self.current_plan):
             step = self.current_plan[step_index]
@@ -386,10 +390,6 @@ def create_redis_cache():
     return RedisCache()
 
 
-def create_semaphore():
-    return
-
-
 class Agent(AsimovBase):
     cache: Optional[Cache] = Field(default_factory=create_redis_cache)
     nodes: Dict[str, Node] = Field(default_factory=dict)
@@ -402,8 +402,9 @@ class Agent(AsimovBase):
     output_mailbox: str = "agent_output"
     error_mailbox: str = "agent_error"
     execution_state: ExecutionState = Field(default_factory=ExecutionState)
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    auto_snapshot: bool = False
     _logger: logging.Logger
+    _snapshot_generation: int = 0
 
     @model_validator(mode="after")
     def set_semaphore(self):
@@ -411,6 +412,18 @@ class Agent(AsimovBase):
         self._logger = logging.getLogger(__name__)
 
         return self
+
+    def __getstate__(self) -> Dict[Any, Any]:
+        # N.B. This does _not_ use pydantic's __getstate__ so unpickling results in a half-initialized object
+        # This is fine for snapshot purposes though since we only need to copy some state out.
+        state = self.__dict__.copy()
+        del state["cache"]
+        # Don't serialize nodes since those can contain unserializable things like callbacks
+        del state["nodes"]
+        return state
+
+    def __setstate__(self, state: Dict[Any, Any]) -> None:
+        self.__dict__.update(state)
 
     def is_success(self, result):
         return result["status"] == "success"
@@ -430,11 +443,14 @@ class Agent(AsimovBase):
     async def run_task(self, task: Task) -> None:
         task.status = TaskStatus.EXECUTING
         self.task = task
-        await self.cache.set("task", task)
 
         self.execution_state.current_plan = self.compile_execution_plan()
-        pprint(self.execution_state.current_plan)
         self.execution_state.execution_history.append(self.execution_state.current_plan)
+
+        await self._run_task(task)
+
+    async def _run_task(self, task: Task) -> None:
+        await self.cache.set("task", task)
 
         failed_chains = set()
         node_visit_count = defaultdict(int)
@@ -445,7 +461,9 @@ class Agent(AsimovBase):
             ):
                 self.execution_state.total_iterations += 1
                 if self.execution_state.total_iterations > self.max_total_iterations:
-                    self._logger.warning(f"Graph execution exceeded maximum total iterations ({self.max_total_iterations})")
+                    self._logger.warning(
+                        f"Graph execution exceeded maximum total iterations ({self.max_total_iterations})"
+                    )
                     await self.cache.publish_to_mailbox(
                         self.error_mailbox,
                         {
@@ -469,6 +487,18 @@ class Agent(AsimovBase):
                 parallel_group = self.execution_state.current_plan[
                     self.execution_state.execution_index
                 ]
+
+                if self.auto_snapshot and any(
+                    self.nodes[n].snapshot == SnapshotControl.ALWAYS
+                    or (
+                        self.nodes[n].snapshot == SnapshotControl.ONCE
+                        and node_visit_count[n] == 0
+                    )
+                    for n in parallel_group["nodes"]
+                ):
+                    dir = await self.snapshot()
+                    self._logger.info(f"Snapshot: {dir}")
+
                 tasks = []
 
                 for i, node_name in enumerate(parallel_group["nodes"]):
@@ -487,7 +517,9 @@ class Agent(AsimovBase):
                             and node_visit_count[node_name]
                             > self.nodes[node_name].node_config.max_visits
                         ):
-                            self._logger.warning(f"Node {node_name} exceeded maximum visits ({self.nodes[node_name].node_config.max_visits})")
+                            self._logger.warning(
+                                f"Node {node_name} exceeded maximum visits ({self.nodes[node_name].node_config.max_visits})"
+                            )
                             await self.cache.publish_to_mailbox(
                                 self.error_mailbox,
                                 {
@@ -570,7 +602,9 @@ class Agent(AsimovBase):
                                                 )
                                                 flow_control_executed = True
                                             else:
-                                                self._logger.warning(f"Flow control attempted to jump to failed node: {next_node}")
+                                                self._logger.warning(
+                                                    f"Flow control attempted to jump to failed node: {next_node}"
+                                                )
                                                 await self.cache.publish_to_mailbox(
                                                     self.error_mailbox,
                                                     {
@@ -584,7 +618,9 @@ class Agent(AsimovBase):
                                                 )
                                                 break
                                         else:
-                                            self._logger.warning(f"Invalid next node: {next_node}")
+                                            self._logger.warning(
+                                                f"Invalid next node: {next_node}"
+                                            )
                                             await self.cache.publish_to_mailbox(
                                                 self.error_mailbox,
                                                 {
@@ -833,3 +869,34 @@ class Agent(AsimovBase):
                 visited.add(node)
                 stack.extend(self.graph[node])
         return False
+
+    async def snapshot(self) -> pathlib.Path:
+        out_dir = os.environ.get("ASIMOV_SNAPSHOT", "/tmp/asimov_snapshot")
+        out_dir = pathlib.Path(out_dir)
+        out_dir = out_dir / str(self.task.id)
+        out_dir = out_dir / str(self._snapshot_generation)
+        self._snapshot_generation += 1
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with open(out_dir / "agent.pkl", "wb") as f:
+            pickle.dump(self, f)
+        with open(out_dir / "cache.json", "w") as f:
+            f.write(jsonpickle.encode(await self.cache.get_all()))
+        return out_dir
+
+    async def run_from_snapshot(self, snapshot_dir: pathlib.Path):
+        with open(snapshot_dir / "agent.pkl", "rb") as f:
+            agent = pickle.load(f)
+            self.graph = agent.graph
+            self.task = agent.task
+            self.max_total_iterations = agent.max_total_iterations
+            self.max_concurrent_tasks = agent.max_concurrent_tasks
+            self.node_results = agent.node_results
+            self.output_mailbox = agent.output_mailbox
+            self.error_mailbox = agent.error_mailbox
+            self.execution_state = agent.execution_state
+        with open(snapshot_dir / "cache.json", "r") as f:
+            await self.cache.clear()
+            cache = jsonpickle.decode(f.read())
+            for k, v in cache.items():
+                await self.cache.set(k, v, raw=True)
+        await self._run_task(self.task)
