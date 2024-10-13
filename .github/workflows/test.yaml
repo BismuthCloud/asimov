@@ -23,3 +23,7 @@ jobs:
       - name: Run tests
         run: |
           hatch test
+
+      - name: Run mypy
+        run: |
+          hatch run mypy --install-types --non-interactive asimov
