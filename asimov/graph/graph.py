@@ -501,6 +501,11 @@ class Agent(AsimovBase):
 
                 tasks = []
 
+                # print(parallel_group["nodes"])
+                from pprint import pprint
+
+                # pprint(self.execution_state.current_plan)
+
                 for i, node_name in enumerate(parallel_group["nodes"]):
                     if (
                         not self.execution_state.was_executed(node_name)
@@ -511,6 +516,7 @@ class Agent(AsimovBase):
                             for dep in self.nodes[node_name].dependencies
                         )
                     ):
+                        # print(node_name)
                         node_visit_count[node_name] += 1
                         if (
                             self.nodes[node_name].node_config.max_visits > 0
@@ -853,6 +859,13 @@ class Agent(AsimovBase):
                                 if future_node in dependents:
                                     future_step["skipped"][j] = True
 
+                # We unmark as skipped any shared dependents of the node we're jumping to.
+                # Users have to be aware of this fact in docs as it can footgun them.
+                dependents = self.get_dependent_chains(start_node)
+                for future_step in new_plan[step_index + 1 :]:
+                    for j, future_node in enumerate(future_step["nodes"]):
+                        if future_node in dependents:
+                            future_step["skipped"][j] = False
                 # No need to process further steps
                 return new_plan
 
