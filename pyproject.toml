@@ -50,17 +50,6 @@ Source = "https://github.com/BismuthCloud/asimov"
 [tool.hatch.version]
 path = "asimov/__init__.py"
 
-[tool.hatch.envs.default]
-dependencies = [
-  "pytest",
-  "pytest-asyncio",
-  "pytest-cov",
-  "mypy",
-]
-[tool.hatch.envs.default.scripts]
-cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=asimov --cov=tests {args}"
-no-cov = "cov --no-cov {args}"
-
 [[tool.hatch.envs.test.matrix]]
 python = ["312"]
 
@@ -68,6 +57,14 @@ python = ["312"]
 extra-dependencies = [
   "pytest-asyncio",
 ]
+
+[tool.hatch.envs.types]
+extra-dependencies = [
+  "mypy>=1.0.0",
+]
+
+[tool.hatch.envs.types.scripts]
+check = "mypy --install-types --non-interactive {args:asimov}"
 
 [tool.coverage.run]
 branch = true
