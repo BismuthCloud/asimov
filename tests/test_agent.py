@@ -6,7 +6,7 @@ from pydantic import Field
 from asimov.graph.tasks import Task, TaskStatus
 
 from asimov.caches.mock_redis_cache import MockRedisCache
-from asimov.graph.graph import (
+from asimov.graph import (
     Agent,
     Node,
     AgentModule,
@@ -1251,4 +1251,5 @@ async def test_snapshotting(simple_agent, mock_cache):
     await new_agent.run_from_snapshot(
         pathlib.Path("/tmp/asimov_snapshot") / str(task.id) / "0"
     )
+    assert (await mock_cache.get("condition_var")) == True
     assert mods_run == {"node1"}
