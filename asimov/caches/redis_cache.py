@@ -1,4 +1,4 @@
-import redis.asyncio as redis
+import redis.asyncio
 import redis.exceptions
 import json
 import jsonpickle
@@ -15,11 +15,11 @@ class RedisCache(Cache):
     port: int = 6379
     db: int = 0
     password: str | None = None
-    _client: redis.Redis
+    _client: redis.asyncio.Redis
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._client = redis.Redis(
+        self._client = redis.asyncio.Redis(
             host=self.host,
             port=self.port,
             db=self.db,
@@ -66,14 +66,13 @@ class RedisCache(Cache):
 
     async def publish_to_mailbox(self, mailbox_id: str, value):
         modified_mailbox_id = await self.apply_key_modifications(mailbox_id)
-        await self._client.lpush(modified_mailbox_id, jsonpickle.encode(value))
+        await self._client.rpush(modified_mailbox_id, jsonpickle.encode(value))
 
     async def get_message(self, mailbox_id: str, timeout=None):
         modified_mailbox_id = await self.apply_key_modifications(mailbox_id)
         try:
             _, message = await self._client.blpop(modified_mailbox_id, timeout=timeout)
-            if message and message["type"] == "message":
-                return json.loads(message["data"])
+            return json.loads(message)
         except redis.exceptions.TimeoutError:
             return None
 
