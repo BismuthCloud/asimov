@@ -53,6 +53,7 @@ path = "asimov/__init__.py"
 [tool.hatch.envs.default]
 dependencies = [
   "pytest",
+  "pytest-asyncio",
   "pytest-cov",
 ]
 [tool.hatch.envs.default.scripts]
@@ -60,7 +61,12 @@ cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=asimov
 no-cov = "cov --no-cov {args}"
 
 [[tool.hatch.envs.test.matrix]]
-python = ["311", "312"]
+python = ["312"]
+
+[tool.hatch.envs.hatch-test]
+extra-dependencies = [
+  "pytest-asyncio",
+]
 
 [tool.coverage.run]
 branch = true
