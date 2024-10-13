@@ -1,9 +1,9 @@
+import pathlib
 import pytest
 import asyncio
 from typing import Dict, Any, AsyncGenerator
 from pydantic import Field
 from asimov.graph.tasks import Task, TaskStatus
-from pprint import pprint
 
 from asimov.caches.mock_redis_cache import MockRedisCache
 from asimov.graph.graph import (
@@ -18,6 +18,7 @@ from asimov.graph.graph import (
     FlowDecision,
     ModuleType,
     Cache,
+    SnapshotControl,
 )
 
 
@@ -68,6 +69,14 @@ class FailingModule(AgentModule):
         self, cache: Cache, semaphore: asyncio.Semaphore
     ) -> Dict[str, Any]:
         raise Exception(f"Failure in {self.name}")
+
+
+class LamdbaModule(AgentModule):
+    async def process(
+        self, cache: Cache, semaphore: asyncio.Semaphore
+    ) -> Dict[str, Any]:
+        self.config.context["lambda"]()
+        return {"status": "success", "result": "run"}
 
 
 @pytest.mark.asyncio
@@ -253,7 +262,6 @@ async def test_error_handling(simple_agent, mock_cache):
     result = await mock_cache.get_message(simple_agent.output_mailbox)
     error = await mock_cache.get_message(simple_agent.error_mailbox)
 
-    print(result)
     assert result["status"] == TaskStatus.PARTIAL
     assert "NodeB" in result["failed_chains"][0]
     assert "Executed A" in str(result["result"]["NodeA"])
@@ -517,7 +525,6 @@ async def test_flow_control(simple_agent, mock_cache):
     result = await mock_cache.get_message(simple_agent.output_mailbox)
     assert result["status"] == TaskStatus.COMPLETE
     assert "Node_1" in result["result"]
-    print(result["result"])
     assert "Node_2" not in result["result"]
 
 
@@ -541,8 +548,6 @@ async def test_module_timeout(simple_agent, mock_cache):
 
     result = await mock_cache.get_message(simple_agent.output_mailbox)
     error = await mock_cache.get_message(simple_agent.error_mailbox)
-
-    print(result)
 
     assert result["status"] == TaskStatus.FAILED
     assert "execution timed out after 1" in error["error"]
@@ -864,7 +869,6 @@ async def test_concurrency_control(simple_agent, mock_cache):
     result = await mock_cache.get_message(simple_agent.output_mailbox)
     assert result["status"] == TaskStatus.COMPLETE
     assert len(result["result"]) == 5  # 5 module results
-    print(end_time - start_time)
     assert (
         0.0 <= (end_time - start_time) < 0.2
     )  # These do nothing so they're bounded by the sleep call in the SlowMockModule
@@ -941,22 +945,13 @@ async def test_mailbox_communication(simple_agent, mock_cache):
     task = Task(type="test", objective="Test mailbox communication", params={})
     await simple_agent.run_task(task)
 
-    print("Output mailbox:", simple_agent.output_mailbox)
-    print("Error mailbox:", simple_agent.error_mailbox)
-    print("All data:", await mock_cache.get_all())
-    print(
-        "Mailbox content:", await mock_cache.peek_mailbox(simple_agent.output_mailbox)
-    )
-
     result = await mock_cache.get_message(simple_agent.output_mailbox)
-    print("Result:", result)
 
     assert result is not None, "No message in output mailbox"
     assert result["status"] == TaskStatus.COMPLETE
     assert "NodeA" in result["result"]
     assert "NodeB" in result["result"]
     assert "NodeC" in result["result"]
-    pprint(result)
     assert "No input for A" in result["result"]["NodeA"]["results"][0]["result"]
     assert (
         "Processed Message from A in B"
@@ -1169,3 +1164,91 @@ async def test_complex_graph_execution(simple_agent, mock_cache):
 
     # Verify FinalNode was executed
     assert "FinalNode" in result["result"], "FinalNode should have been executed"
+
+
+@pytest.mark.asyncio
+async def test_snapshotting(simple_agent, mock_cache):
+    simple_agent.auto_snapshot = True
+    await mock_cache.set("condition_var", True)
+
+    mods_run = set()
+
+    def construct_flow(agent):
+        flow_config = FlowControlConfig(
+            decisions=[
+                FlowDecision(condition="condition_var == true", next_node="Node_1"),
+                FlowDecision(next_node="Node_2"),
+            ]
+        )
+
+        flow_module = FlowControlModule(
+            name="flow",
+            type=ModuleType.FLOW_CONTROL,
+            config=ModuleConfig(),
+            flow_config=flow_config,
+        )
+
+        agent.add_node(
+            Node(
+                name="Node_0",
+                modules=[
+                    LamdbaModule(
+                        name="m0",
+                        type=ModuleType.EXECUTOR,
+                        config=ModuleConfig(
+                            context={"lambda": lambda: mods_run.add("node0")}
+                        ),
+                    ),
+                    flow_module,
+                ],
+                dependencies=[],
+            )
+        )
+        agent.add_node(
+            Node(
+                name="Node_1",
+                modules=[
+                    LamdbaModule(
+                        name="m1",
+                        type=ModuleType.EXECUTOR,
+                        config=ModuleConfig(
+                            context={"lambda": lambda: mods_run.add("node1")}
+                        ),
+                    )
+                ],
+                dependencies=["Node_0"],
+                snapshot=SnapshotControl.ALWAYS,
+            )
+        )
+        agent.add_node(
+            Node(
+                name="Node_2",
+                modules=[
+                    LamdbaModule(
+                        name="m2",
+                        type=ModuleType.EXECUTOR,
+                        config=ModuleConfig(
+                            context={"lambda": lambda: mods_run.add("node2")}
+                        ),
+                    )
+                ],
+                dependencies=["Node_0"],
+            )
+        )
+
+    construct_flow(simple_agent)
+    task = Task(type="test", objective="Test objective", params={})
+    await simple_agent.run_task(task)
+
+    assert mods_run == {"node0", "node1"}
+    assert simple_agent._snapshot_generation == 1
+
+    mods_run.clear()
+    await mock_cache.clear()
+
+    new_agent = Agent(cache=mock_cache)
+    construct_flow(new_agent)
+    await new_agent.run_from_snapshot(
+        pathlib.Path("/tmp/asimov_snapshot") / str(task.id) / "0"
+    )
+    assert mods_run == {"node1"}
