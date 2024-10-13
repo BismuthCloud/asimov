@@ -253,6 +253,7 @@ async def test_error_handling(simple_agent, mock_cache):
     result = await mock_cache.get_message(simple_agent.output_mailbox)
     error = await mock_cache.get_message(simple_agent.error_mailbox)
 
+    print(result)
     assert result["status"] == TaskStatus.PARTIAL
     assert "NodeB" in result["failed_chains"][0]
     assert "Executed A" in str(result["result"]["NodeA"])
@@ -1154,15 +1155,11 @@ async def test_complex_graph_execution(simple_agent, mock_cache):
     assert "FinalNode" in result["result"], "FinalNode should have been executed"
 
     # Check for any error messages
-    error_messages = await mock_cache.get_message(simple_agent.error_mailbox)
+    error_messages = await mock_cache.get_message(simple_agent.error_mailbox, timeout=0)
     assert error_messages is None, f"Unexpected errors: {error_messages}"
 
     # Verify final node execution
     assert result["result"]["FinalNode"]["results"][0]["status"] == "success"
-
-    # Check for any error messages
-    error_messages = await mock_cache.get_message(simple_agent.error_mailbox)
-    assert error_messages is None, f"Unexpected errors: {error_messages}"
 
     # Verify dynamic node creation
     assert "DynamicallyAddedNode" in result["result"]
@@ -1172,11 +1169,3 @@ async def test_complex_graph_execution(simple_agent, mock_cache):
 
     # Verify FinalNode was executed
     assert "FinalNode" in result["result"], "FinalNode should have been executed"
-
-    # Check for any error messages
-    error_messages = await mock_cache.get_message(simple_agent.error_mailbox)
-    assert error_messages is None, f"Unexpected errors: {error_messages}"
-
-
-if __name__ == "__main__":
-    pytest.main()

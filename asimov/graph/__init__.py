@@ -84,8 +84,6 @@ class AgentModule(AsimovBase):
     _generator: Optional[AsyncGenerator] = None
 
     async def run(self, cache: Cache, semaphore: asyncio.Semaphore) -> None:
-        await self.setup_mailboxes(cache)
-
         try:
             if self._generator:
                 output = await self._generator.__anext__()
@@ -107,22 +105,6 @@ class AgentModule(AsimovBase):
             await cache.publish_to_mailbox(self.output_mailbox, output)
 
         return output
-
-    async def setup_mailboxes(self, cache: Cache):
-        for mailbox in self.input_mailboxes:
-            try:
-                await cache.create_mailbox(mailbox)
-            except Exception as e:
-                # Handle case where mailbox already exists
-                pass
-            await cache.subscribe_to_mailbox(mailbox)
-
-        if self.output_mailbox:
-            try:
-                await cache.create_mailbox(self.output_mailbox)
-            except Exception as e:
-                # Handle case where mailbox already exists
-                pass
 
     async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Any:
         raise NotImplementedError

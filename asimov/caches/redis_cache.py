@@ -1,4 +1,5 @@
 import redis.asyncio as redis
+import redis.exceptions
 import json
 import jsonpickle
 from typing import Dict, Any, Set
@@ -15,7 +16,6 @@ class RedisCache(Cache):
     db: int = 0
     password: str | None = None
     _client: redis.Redis
-    _pubsub: redis.client.PubSub
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -25,13 +25,6 @@ class RedisCache(Cache):
             db=self.db,
             password=self.password,
         )
-        self._pubsub = self._client.pubsub()
-
-    async def get_message(self, timeout=None):
-        message = await self._pubsub.get_message(timeout=timeout)
-        if message and message["type"] == "message":
-            return json.loads(message["data"])
-        return None
 
     async def get(self, key: str, default=RAISE_ON_NONE, raw=False):
         modified_key = key
@@ -71,23 +64,18 @@ class RedisCache(Cache):
             result[key.decode("utf-8")] = value
         return result
 
-    async def create_mailbox(self, mailbox_id: str):
-        modified_mailbox_id = await self.apply_key_modifications(mailbox_id)
-        await self._client.publish(f"mailbox:{modified_mailbox_id}", "")
-
     async def publish_to_mailbox(self, mailbox_id: str, value):
         modified_mailbox_id = await self.apply_key_modifications(mailbox_id)
-        await self._client.publish(
-            f"mailbox:{modified_mailbox_id}", jsonpickle.encode(value)
-        )
+        await self._client.lpush(modified_mailbox_id, jsonpickle.encode(value))
 
-    async def subscribe_to_mailbox(self, mailbox_id: str):
+    async def get_message(self, mailbox_id: str, timeout=None):
         modified_mailbox_id = await self.apply_key_modifications(mailbox_id)
-        await self._pubsub.subscribe(f"mailbox:{modified_mailbox_id}")
-
-    async def unsubscribe_from_mailbox(self, mailbox_id: str):
-        modified_mailbox_id = await self.apply_key_modifications(mailbox_id)
-        await self._pubsub.unsubscribe(f"mailbox:{modified_mailbox_id}")
+        try:
+            _, message = await self._client.blpop(modified_mailbox_id, timeout=timeout)
+            if message and message["type"] == "message":
+                return json.loads(message["data"])
+        except redis.exceptions.TimeoutError:
+            return None
 
     async def keys(self) -> Set[str]:
         keys: Set[str] = set()
@@ -114,7 +102,5 @@ class RedisCache(Cache):
         return keys
 
     async def close(self):
-        if self._pubsub:
-            await self._pubsub.close()
         if self._client:
-            await self._client.aclose()
+            await self._client.close()

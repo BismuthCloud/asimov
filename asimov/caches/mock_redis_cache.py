@@ -65,38 +65,23 @@ class MockRedisCache(Cache):
         for key in keys_to_delete:
             await self.delete(key)
 
-    async def create_mailbox(self, mailbox_id: str) -> None:
-        # No-op for this mock implementation
-        pass
-
     async def peek_mailbox(self, mailbox_id: str) -> list:
         return list(self.mailboxes[mailbox_id].queue)
 
     async def peek_message(self, mailbox_id: str) -> str:
         return list(self.mailboxes[mailbox_id].queue)[-1]
 
-    async def get_message(self, timeout=None):
-        for mailbox in self.mailboxes.values():
-            if not mailbox.empty():
-                return mailbox.get_nowait()
-        return None
+    async def get_message(self, mailbox: str, timeout=None):
+        try:
+            return self.mailboxes[mailbox].get(block=True, timeout=timeout)
+        except:
+            return None
 
     async def publish_to_mailbox(self, mailbox: str, message: Any):
         self.mailboxes[mailbox].put(message)
 
     async def get_all_messages(self, mailbox: str):
         return list(self.mailboxes[mailbox].queue)
-
-    async def subscribe_to_mailbox(self, mailbox_id: str) -> None:
-        # In a real Redis instance, this would subscribe to a channel.
-        # Here, we simply ensure the mailbox exists in the mock channels.
-        self.mailboxes[mailbox_id]
-
-    async def unsubscribe_from_mailbox(self, mailbox_id: str) -> None:
-        # In a real Redis instance, this would unsubscribe from a channel.
-        # Here, we simulate that by removing the channel from our mock.
-        if mailbox_id in self.mailboxes:
-            del self.mailboxes[mailbox_id]
 
     async def keys(self) -> Set[str]:
         prefix = await self.get_prefix()
