@@ -1,15 +1,11 @@
+import asyncio
 from collections import defaultdict
 from asimov.caches.cache import Cache
 from pydantic import Field
 from typing import Any, Optional, Dict, Set
-from queue import Queue
 from asimov.caches.cache import Cache
 from pydantic import Field, field_validator
 import copy
-
-
-def create_queue() -> Queue:
-    return Queue()
 
 
 RAISE_ON_NONE = object()
@@ -17,15 +13,15 @@ RAISE_ON_NONE = object()
 
 class MockRedisCache(Cache):
     data: dict = Field(default_factory=dict)
-    mailboxes: Dict[str, Queue] = Field(default_factory=dict)
+    mailboxes: Dict[str, list[str]] = Field(default_factory=dict)
 
     @field_validator("mailboxes", mode="before")
     def set_mailboxes(cls, v):
-        return defaultdict(create_queue, v)
+        return defaultdict(list, v)
 
     def __init__(self):
         super().__init__()
-        self.mailboxes = defaultdict(Queue)
+        self.mailboxes = defaultdict(list)
 
     async def clear(self):
         self.data = {}
@@ -66,22 +62,25 @@ class MockRedisCache(Cache):
             await self.delete(key)
 
     async def peek_mailbox(self, mailbox_id: str) -> list:
-        return list(self.mailboxes[mailbox_id].queue)
+        return self.mailboxes[mailbox_id][:]
 
     async def peek_message(self, mailbox_id: str) -> str:
-        return list(self.mailboxes[mailbox_id].queue)[-1]
+        return self.mailboxes[mailbox_id][0]
 
     async def get_message(self, mailbox: str, timeout=None):
+        async def _get():
+            while True:
+                if len(self.mailboxes[mailbox]) > 0:
+                    return self.mailboxes[mailbox].pop(0)
+                await asyncio.sleep(0.1)
+
         try:
-            return self.mailboxes[mailbox].get(block=True, timeout=timeout)
-        except:
+            return await asyncio.wait_for(_get(), timeout=timeout)
+        except asyncio.TimeoutError:
             return None
 
     async def publish_to_mailbox(self, mailbox: str, message: Any):
-        self.mailboxes[mailbox].put(message)
-
-    async def get_all_messages(self, mailbox: str):
-        return list(self.mailboxes[mailbox].queue)
+        self.mailboxes[mailbox].append(message)
 
     async def keys(self) -> Set[str]:
         prefix = await self.get_prefix()
