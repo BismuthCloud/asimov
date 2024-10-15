@@ -478,7 +478,7 @@ class Agent(AsimovBase):
                     )
                     for n in parallel_group["nodes"]
                 ):
-                    dir = await self.snapshot()
+                    dir = await self.snapshot("-".join(sorted(parallel_group["nodes"])))
                     self._logger.info(f"Snapshot: {dir}")
 
                 tasks = []
@@ -865,11 +865,11 @@ class Agent(AsimovBase):
                 stack.extend(self.graph[node])
         return False
 
-    async def snapshot(self) -> pathlib.Path:
+    async def snapshot(self, name_hint: str) -> pathlib.Path:
         out_dir = os.environ.get("ASIMOV_SNAPSHOT", "/tmp/asimov_snapshot")
         out_dir = pathlib.Path(out_dir)
         out_dir = out_dir / str(self.task.id)
-        out_dir = out_dir / str(self._snapshot_generation)
+        out_dir = out_dir / f"{self._snapshot_generation}_{name_hint}"
         self._snapshot_generation += 1
         out_dir.mkdir(parents=True, exist_ok=True)
         with open(out_dir / "agent.pkl", "wb") as f:
