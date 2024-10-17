@@ -55,13 +55,13 @@ class ModelFamily(Enum):
 class InferenceClient(ABC):
     @abstractmethod
     async def connect_and_listen(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
     ):
         pass
 
     @abstractmethod
     async def get_generation(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
     ):
         pass
 
@@ -74,19 +74,26 @@ class BedrockInferenceClient(InferenceClient):
         self.anthropic_version = "bedrock-2023-05-31"
 
     async def get_generation(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
     ):
+
+        system = ""
+        if messages[0]["role"] == "system":
+            system = messages[0]["content"]
+            messages = messages[1:]
+
         body = AnthropicRequest(
             anthropic_version=self.anthropic_version,
-            system=messages[0]["content"],
+            system=system,
             top_p=top_p,
+            temperature=temperature,
             max_tokens=max_tokens,
             messages=[
                 {
                     "role": msg["role"],
                     "content": [{"type": "text", "text": msg["content"]}],
                 }
-                for msg in messages[1:]
+                for msg in messages
             ],
         )
 
@@ -105,12 +112,13 @@ class BedrockInferenceClient(InferenceClient):
             return body["content"][0]["text"]
 
     async def connect_and_listen(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
     ):
         body = AnthropicRequest(
             anthropic_version=self.anthropic_version,
             system=messages[0]["content"],
             top_p=top_p,
+            temperature=temperature,
             max_tokens=max_tokens,
             messages=[
                 {
@@ -169,7 +177,7 @@ class AnthropicInferenceClient(InferenceClient):
         self.api_key = api_key
 
     async def get_generation(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
     ):
         request = {
             "model": self.model,
@@ -182,6 +190,7 @@ class AnthropicInferenceClient(InferenceClient):
                 )
             ],
             "top_p": top_p,
+            "temperature": temperature,
             "max_tokens": max_tokens,
             "messages": [
                 {"role": msg["role"], "content": msg["content"]}
@@ -212,7 +221,7 @@ class AnthropicInferenceClient(InferenceClient):
             return response.json()["content"][0]["text"]
 
     async def connect_and_listen(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
     ):
         request = {
             "model": self.model,
@@ -225,6 +234,7 @@ class AnthropicInferenceClient(InferenceClient):
                 )
             ],
             "top_p": top_p,
+            "temperature": temperature,
             "max_tokens": max_tokens,
             "messages": [
                 {
