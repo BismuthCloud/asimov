@@ -94,3 +94,4 @@ exclude = [
 [tool.pytest.ini_options]
 timeout = 10
 timeout_method = "thread"
+asyncio_default_fixture_loop_scope = "function"

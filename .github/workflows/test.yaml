@@ -5,7 +5,7 @@ on:
   push:
 
 jobs:
-  pytest:
+  Test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -14,7 +14,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install hatch
         run: |
@@ -22,7 +22,8 @@ jobs:
 
       - name: Run tests
         run: |
-          hatch test
+          docker run --rm -d -p 6379:6379 redis
+          hatch test -- -vv -s --log-cli-level DEBUG
 
       - name: Run mypy
         run: |

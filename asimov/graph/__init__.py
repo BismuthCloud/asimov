@@ -893,5 +893,6 @@ class Agent(AsimovBase):
             await self.cache.clear()
             cache = jsonpickle.decode(f.read())
             for k, v in cache.items():
+                # get_all returns keys with prefixes, so set with raw=True
                 await self.cache.set(k, v, raw=True)
         await self._run_task(self.task)

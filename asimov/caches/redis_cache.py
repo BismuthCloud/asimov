@@ -1,6 +1,5 @@
 import redis.asyncio
 import redis.exceptions
-import json
 import jsonpickle
 from typing import Dict, Any, Set
 
@@ -60,7 +59,11 @@ class RedisCache(Cache):
         all_keys = await self._client.keys(f"{prefix}{self.affix_sep}*")
         result = {}
         for key in all_keys:
-            value = await self.get(key.decode("utf-8"), raw=True)
+            try:
+                value = await self.get(key.decode("utf-8"), raw=True)
+            except redis.exceptions.ResponseError:
+                # Attempt to GET a non-normal key, e.g. a mailbox list
+                continue
             result[key.decode("utf-8")] = value
         return result
 
@@ -70,11 +73,11 @@ class RedisCache(Cache):
 
     async def get_message(self, mailbox_id: str, timeout=None):
         modified_mailbox_id = await self.apply_key_modifications(mailbox_id)
-        try:
-            _, message = await self._client.blpop(modified_mailbox_id, timeout=timeout)
-            return json.loads(message)
-        except redis.exceptions.TimeoutError:
+        res = await self._client.blpop(modified_mailbox_id, timeout=timeout)
+        if res is None:
             return None
+        _key, message = res
+        return jsonpickle.decode(message)
 
     async def keys(self) -> Set[str]:
         keys: Set[str] = set()
@@ -102,4 +105,4 @@ class RedisCache(Cache):
 
     async def close(self):
         if self._client:
-            await self._client.close()
+            await self._client.aclose()
