@@ -7,10 +7,8 @@ from asimov.caches.redis_cache import RedisCache
 async def redis_cache():
     cache = RedisCache(default_prefix="test")
     await cache.clear()
-    try:
-        yield cache
-    finally:
-        await cache.close()
+    yield cache
+    await cache.close()
 
 
 @pytest.mark.asyncio

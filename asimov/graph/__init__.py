@@ -6,28 +6,26 @@ import pathlib
 import pickle
 import re
 import logging
-from typing import List, Dict, Any, AsyncGenerator, Optional, Union, TypedDict, Tuple
+import opentelemetry.trace
+from typing import List, Dict, Any, AsyncGenerator, Optional, TypedDict
 from pydantic import (
-    ConfigDict,
     Field,
     PrivateAttr,
-    field_validator,
     model_validator,
 )
 import traceback
 
 from lupa import LuaRuntime
 from collections import defaultdict
-import uuid
-from pprint import pprint
 
 from asimov.graph.tasks import Task, TaskStatus
 from asimov.caches.cache import Cache
 from asimov.asimov_base import AsimovBase
 from asimov.caches.redis_cache import RedisCache
-from contextlib import suppress
 
 lua = LuaRuntime(unpack_returned_tuples=True)
+
+tracer = opentelemetry.trace.get_tracer("asimov")
 
 
 class TasksFinished(Exception):
@@ -81,6 +79,7 @@ class AgentModule(AsimovBase):
     output_mailbox: str = Field(default="")
     container: Optional["Node"] = None
     executions: int = Field(default=0)
+    trace: bool = Field(default=False)
     _generator: Optional[AsyncGenerator] = None
 
     async def run(self, cache: Cache, semaphore: asyncio.Semaphore) -> None:
@@ -286,7 +285,12 @@ class CompositeModule(AgentModule):
         async with semaphore:
             try:
                 async with asyncio.timeout(module.config.timeout):
-                    result = await module.run(cache, semaphore)
+                    if module.trace:
+                        with tracer.start_as_current_span("run_module") as span:
+                            span.set_attribute("module_name", module.name)
+                            result = await module.run(cache, semaphore)
+                    else:
+                        result = await module.run(cache, semaphore)
                     return await self.apply_middlewares(
                         module.config.middlewares, result, cache
                     )
@@ -429,7 +433,9 @@ class Agent(AsimovBase):
         self.execution_state.current_plan = self.compile_execution_plan()
         self.execution_state.execution_history.append(self.execution_state.current_plan)
 
-        await self._run_task(task)
+        with tracer.start_as_current_span("run_task") as span:
+            span.set_attribute("task_id", str(task.id))
+            await self._run_task(task)
 
     async def _run_task(self, task: Task) -> None:
         await self.cache.set("task", task)
@@ -682,7 +688,16 @@ class Agent(AsimovBase):
             retries < node.node_config.max_retries and node.node_config.retry_on_failure
         ):
             try:
-                result = await node.run(cache=self.cache, semaphore=self._semaphore)
+                if node.trace:
+                    with tracer.start_as_current_span("run_node") as span:
+                        span.set_attribute("node_name", node_name)
+                        span.set_attribute("retry", retries)
+                        result = await node.run(
+                            cache=self.cache, semaphore=self._semaphore
+                        )
+                        span.set_attribute("success", self.is_success(result))
+                else:
+                    result = await node.run(cache=self.cache, semaphore=self._semaphore)
 
                 if not self.is_success(result):
                     retries += 1

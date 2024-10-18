@@ -1,11 +1,13 @@
 import json
-from typing import List, Dict, Any, Callable, AsyncGenerator
+from typing import List, Dict, Any
 from dataclasses import dataclass
 from enum import Enum
 from abc import ABC, abstractmethod
 
 import aioboto3
 import httpx
+import opentelemetry.instrumentation.httpx
+opentelemetry.instrumentation.httpx.HTTPXClientInstrumentor().instrument()
 
 
 class ChatRole(Enum):

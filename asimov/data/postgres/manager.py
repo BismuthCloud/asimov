@@ -5,6 +5,9 @@ from threading import Lock
 import contextlib
 from psycopg2.extras import RealDictCursor
 import psycopg2.pool
+import opentelemetry.instrumentation.psycopg2
+
+opentelemetry.instrumentation.psycopg2.Psycopg2Instrumentor().instrument()
 
 
 class DatabaseManager:
