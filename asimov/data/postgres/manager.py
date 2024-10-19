@@ -11,7 +11,7 @@ opentelemetry.instrumentation.psycopg2.Psycopg2Instrumentor().instrument()
 
 
 class DatabaseManager:
-    _instances = {}
+    _instances: dict[str, dict] = {}
     _lock = Lock()
     _initialized = False
 

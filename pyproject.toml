@@ -65,10 +65,15 @@ extra-dependencies = [
 [tool.hatch.envs.types]
 extra-dependencies = [
   "mypy>=1.0.0",
+  # types-lupa is wrong in a bunch of places
+  "types-aioboto3>=13.0.0",
 ]
 
 [tool.hatch.envs.types.scripts]
 check = "mypy --install-types --non-interactive {args:asimov}"
+
+[tool.mypy]
+ignore_missing_imports = true
 
 [tool.coverage.run]
 branch = true

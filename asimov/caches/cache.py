@@ -58,7 +58,7 @@ class Cache(AsimovBase, ABC):
         return self.get(key)
 
     @abstractmethod
-    async def get(self, key: str, default: Optional[any] = None, raw: bool = False):
+    async def get(self, key: str, default: Optional[Any] = None, raw: bool = False):
         pass
 
     @abstractmethod
@@ -82,7 +82,7 @@ class Cache(AsimovBase, ABC):
         pass
 
     @abstractmethod
-    async def get_message(self, timeout=None):
+    async def get_message(self, mailbox: str, timeout: Optional[float] = None):
         pass
 
     @abstractmethod

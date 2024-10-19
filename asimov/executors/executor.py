@@ -1,14 +1,17 @@
 from abc import ABC, abstractmethod
-from asimov.graph.graph import AgentModule, ModuleConfig, ModuleType
-from typing import Any, Dict
-from asimov.caches.cache import Cache
+from typing import Any
 from pydantic import Field
 import asyncio
+
+from asimov.caches.cache import Cache
+from asimov.graph import AgentModule, ModuleType
 
 
 class Executor(AgentModule, ABC):
     type: ModuleType = Field(default=ModuleType.EXECUTOR)
 
     @abstractmethod
-    async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Any:
+    async def process(
+        self, cache: Cache, semaphore: asyncio.Semaphore
+    ) -> dict[str, Any]:
         raise NotImplementedError

@@ -23,7 +23,7 @@ from asimov.caches.cache import Cache
 from asimov.asimov_base import AsimovBase
 from asimov.caches.redis_cache import RedisCache
 
-lua = LuaRuntime(unpack_returned_tuples=True)
+lua = LuaRuntime(unpack_returned_tuples=True)  # type: ignore[call-arg]
 
 tracer = opentelemetry.trace.get_tracer("asimov")
 
@@ -77,12 +77,12 @@ class AgentModule(AsimovBase):
     dependencies: List[str] = Field(default_factory=list)
     input_mailboxes: List[str] = Field(default_factory=list)
     output_mailbox: str = Field(default="")
-    container: Optional["Node"] = None
+    container: Optional["CompositeModule"] = None
     executions: int = Field(default=0)
     trace: bool = Field(default=False)
     _generator: Optional[AsyncGenerator] = None
 
-    async def run(self, cache: Cache, semaphore: asyncio.Semaphore) -> None:
+    async def run(self, cache: Cache, semaphore: asyncio.Semaphore) -> dict[str, Any]:
         try:
             if self._generator:
                 output = await self._generator.__anext__()
@@ -105,7 +105,9 @@ class AgentModule(AsimovBase):
 
         return output
 
-    async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Any:
+    async def process(
+        self, cache: Cache, semaphore: asyncio.Semaphore
+    ) -> dict[str, Any]:
         raise NotImplementedError
 
     def is_success(self, result: Dict[str, Any]) -> bool:
@@ -220,7 +222,7 @@ class CompositeModule(AgentModule):
     modules: List[AgentModule]
     node_config: NodeConfig
 
-    async def run(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, any]:
+    async def run(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
         if self.node_config.parallel:
             result = await self.run_parallel_modules(cache, semaphore)
         else:
@@ -309,15 +311,12 @@ class SnapshotControl(Enum):
 
 
 class Node(CompositeModule):
-    def subgraph_default_type_factory():
-        return ModuleType.SUBGRAPH
-
     _nodes: Dict[str, "Node"] = PrivateAttr()
     modules: List[AgentModule] = Field(default_factory=list)
     node_config: NodeConfig = Field(default_factory=NodeConfig)
-    type: ModuleType = Field(default_factory=subgraph_default_type_factory)
+    type: ModuleType = Field(default=ModuleType.SUBGRAPH)
     dependencies: List[str] = Field(default_factory=list)
-    snapshot: SnapshotControl = SnapshotControl.NEVER
+    snapshot: SnapshotControl = Field(default=SnapshotControl.NEVER)
 
     def set_nodes(self, nodes: Dict[str, "Node"]):
         self._nodes = nodes
@@ -377,10 +376,9 @@ def create_redis_cache():
 
 
 class Agent(AsimovBase):
-    cache: Optional[Cache] = Field(default_factory=create_redis_cache)
+    cache: Cache = Field(default_factory=create_redis_cache)
     nodes: Dict[str, Node] = Field(default_factory=dict)
     graph: Dict[str, List[str]] = Field(default_factory=dict)
-    task: Optional[Task] = None
     max_total_iterations: int = Field(default=100)
     max_concurrent_tasks: int = Field(default=5)
     _semaphore: asyncio.Semaphore = PrivateAttr()
@@ -414,7 +412,7 @@ class Agent(AsimovBase):
     def is_success(self, result):
         return result["status"] == "success"
 
-    def add_node(self, node: AgentModule):
+    def add_node(self, node: Node):
         if node.name in self.nodes:
             raise ValueError(f"Node with name {node.name} already exists")
         self.nodes[node.name] = node
@@ -422,13 +420,12 @@ class Agent(AsimovBase):
 
         node.set_nodes(self.nodes)
 
-    def add_multiple_nodes(self, nodes: List[AgentModule]):
+    def add_multiple_nodes(self, nodes: List[Node]):
         for node in nodes:
             self.add_node(node)
 
     async def run_task(self, task: Task) -> None:
         task.status = TaskStatus.EXECUTING
-        self.task = task
 
         self.execution_state.current_plan = self.compile_execution_plan()
         self.execution_state.execution_history.append(self.execution_state.current_plan)
@@ -440,8 +437,8 @@ class Agent(AsimovBase):
     async def _run_task(self, task: Task) -> None:
         await self.cache.set("task", task)
 
-        failed_chains = set()
-        node_visit_count = defaultdict(int)
+        failed_chains: set[tuple[str, ...]] = set()
+        node_visit_count: defaultdict[str, int] = defaultdict(int)
 
         while self.execution_state.current_plan:
             while self.execution_state.execution_index < len(
@@ -484,7 +481,9 @@ class Agent(AsimovBase):
                     )
                     for n in parallel_group["nodes"]
                 ):
-                    dir = await self.snapshot("-".join(sorted(parallel_group["nodes"])))
+                    dir = await self.snapshot(
+                        task, "-".join(sorted(parallel_group["nodes"]))
+                    )
                     self._logger.info(f"Snapshot: {dir}")
 
                 tasks = []
@@ -639,7 +638,7 @@ class Agent(AsimovBase):
                 self.execution_state.current_plan
             ):
                 # Current plan completed, prepare for the next plan if any
-                self.execution_state.current_plan = None
+                self.execution_state.current_plan = []
                 self.execution_state.execution_index = 0
 
         if failed_chains:
@@ -719,8 +718,8 @@ class Agent(AsimovBase):
 
         return result
 
-    def get_dependent_chains(self, node_name):
-        dependent_chains = set()
+    def get_dependent_chains(self, node_name: str) -> tuple[str, ...]:
+        dependent_chains: set[str] = set()
         dependent_chains.add(node_name)
         queue = [node_name]
         while queue:
@@ -880,10 +879,11 @@ class Agent(AsimovBase):
                 stack.extend(self.graph[node])
         return False
 
-    async def snapshot(self, name_hint: str) -> pathlib.Path:
-        out_dir = os.environ.get("ASIMOV_SNAPSHOT", "/tmp/asimov_snapshot")
-        out_dir = pathlib.Path(out_dir)
-        out_dir = out_dir / str(self.task.id)
+    async def snapshot(self, task: Task, name_hint: str) -> pathlib.Path:
+        out_dir = pathlib.Path(
+            os.environ.get("ASIMOV_SNAPSHOT", "/tmp/asimov_snapshot")
+        )
+        out_dir = out_dir / str(task.id)
         out_dir = out_dir / f"{self._snapshot_generation}_{name_hint}"
         self._snapshot_generation += 1
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -891,13 +891,14 @@ class Agent(AsimovBase):
             pickle.dump(self, f)
         with open(out_dir / "cache.json", "w") as f:
             f.write(jsonpickle.encode(await self.cache.get_all()))
+        with open(out_dir / "task.pkl", "wb") as f:
+            pickle.dump(task, f)
         return out_dir
 
     async def run_from_snapshot(self, snapshot_dir: pathlib.Path):
         with open(snapshot_dir / "agent.pkl", "rb") as f:
             agent = pickle.load(f)
             self.graph = agent.graph
-            self.task = agent.task
             self.max_total_iterations = agent.max_total_iterations
             self.max_concurrent_tasks = agent.max_concurrent_tasks
             self.node_results = agent.node_results
@@ -910,4 +911,6 @@ class Agent(AsimovBase):
             for k, v in cache.items():
                 # get_all returns keys with prefixes, so set with raw=True
                 await self.cache.set(k, v, raw=True)
-        await self._run_task(self.task)
+        with open(snapshot_dir / "task.pkl", "rb") as f:
+            task = pickle.load(f)
+        await self._run_task(task)

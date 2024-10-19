@@ -25,6 +25,7 @@ class MockRedisCache(Cache):
 
     async def clear(self):
         self.data = {}
+        self.mailboxes = defaultdict(list)
 
     async def get(
         self, key: str, default: Any = RAISE_ON_NONE, raw: bool = False
@@ -55,19 +56,13 @@ class MockRedisCache(Cache):
         modified_key = key
         self.data.pop(modified_key, None)
 
-    async def clear(self) -> None:
-        prefix = await self.get_prefix()
-        keys_to_delete = [key for key in self.data if key.startswith(prefix)]
-        for key in keys_to_delete:
-            await self.delete(key)
-
     async def peek_mailbox(self, mailbox_id: str) -> list:
         return self.mailboxes[mailbox_id][:]
 
     async def peek_message(self, mailbox_id: str) -> str:
         return self.mailboxes[mailbox_id][0]
 
-    async def get_message(self, mailbox: str, timeout=None):
+    async def get_message(self, mailbox: str, timeout: Optional[float] = None):
         async def _get():
             while True:
                 if len(self.mailboxes[mailbox]) > 0:

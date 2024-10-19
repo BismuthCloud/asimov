@@ -1,7 +1,7 @@
 import redis.asyncio
 import redis.exceptions
 import jsonpickle
-from typing import Dict, Any, Set
+from typing import Dict, Any, Optional, Set
 
 from asimov.caches.cache import Cache
 
@@ -69,11 +69,11 @@ class RedisCache(Cache):
 
     async def publish_to_mailbox(self, mailbox_id: str, value):
         modified_mailbox_id = await self.apply_key_modifications(mailbox_id)
-        await self._client.rpush(modified_mailbox_id, jsonpickle.encode(value))
+        await self._client.rpush(modified_mailbox_id, jsonpickle.encode(value))  # type: ignore
 
-    async def get_message(self, mailbox_id: str, timeout=None):
+    async def get_message(self, mailbox_id: str, timeout: Optional[float] = None):
         modified_mailbox_id = await self.apply_key_modifications(mailbox_id)
-        res = await self._client.blpop(modified_mailbox_id, timeout=timeout)
+        res = await self._client.blpop([modified_mailbox_id], timeout=timeout)  # type: ignore
         if res is None:
             return None
         _key, message = res

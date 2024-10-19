@@ -1,12 +1,14 @@
 import json
 from typing import List, Dict, Any
-from dataclasses import dataclass
 from enum import Enum
 from abc import ABC, abstractmethod
 
 import aioboto3
 import httpx
 import opentelemetry.instrumentation.httpx
+
+from asimov.asimov_base import AsimovBase
+
 opentelemetry.instrumentation.httpx.HTTPXClientInstrumentor().instrument()
 
 
@@ -16,19 +18,13 @@ class ChatRole(Enum):
     ASSISTANT = "assistant"
 
 
-class ChatMessage:
-    content: str
+class ChatMessage(AsimovBase):
     role: ChatRole
-    cache_marker: bool
-
-    def __init__(self, content: str, role: ChatRole, cache_marker: bool = False):
-        self.content = content
-        self.role = role
-        self.cache_marker = cache_marker
+    content: str
+    cache_marker: bool = False
 
 
-@dataclass
-class AnthropicRequest:
+class AnthropicRequest(AsimovBase):
     anthropic_version: str
     system: str
     messages: List[Dict[str, Any]]
@@ -36,18 +32,6 @@ class AnthropicRequest:
     temperature: float = 0.5
     top_p: float = 0.9
     top_k: int = 50
-
-
-@dataclass
-class AnthropicMessageContent:
-    type: str
-    text: str
-
-
-@dataclass
-class AnthropicMessage:
-    role: str
-    content: List[AnthropicMessageContent]
 
 
 class InferenceClient(ABC):
@@ -76,11 +60,11 @@ class BedrockInferenceClient(InferenceClient):
     ):
 
         system = ""
-        if messages[0]["role"] == "system":
-            system = messages[0]["content"]
+        if messages[0].role == ChatRole.SYSTEM:
+            system = messages[0].content
             messages = messages[1:]
 
-        body = AnthropicRequest(
+        request = AnthropicRequest(
             anthropic_version=self.anthropic_version,
             system=system,
             top_p=top_p,
@@ -88,8 +72,8 @@ class BedrockInferenceClient(InferenceClient):
             max_tokens=max_tokens,
             messages=[
                 {
-                    "role": msg["role"],
-                    "content": [{"type": "text", "text": msg["content"]}],
+                    "role": msg.role,
+                    "content": [{"type": "text", "text": msg.content}],
                 }
                 for msg in messages
             ],
@@ -100,30 +84,35 @@ class BedrockInferenceClient(InferenceClient):
             region_name=self.region_name,
         ) as client:
             response = await client.invoke_model(
-                body=json.dumps(body.__dict__),
+                body=request.model_dump_json(),
                 modelId=self.model,
                 contentType="application/json",
                 accept="application/json",
             )
 
-            body = json.loads(await response["body"].read())
+            body: dict = json.loads(await response["body"].read())
             return body["content"][0]["text"]
 
     async def connect_and_listen(
         self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
     ):
+        system = ""
+        if messages[0].role == ChatRole.SYSTEM:
+            system = messages[0].content
+            messages = messages[1:]
+
         body = AnthropicRequest(
             anthropic_version=self.anthropic_version,
-            system=messages[0]["content"],
+            system=system,
             top_p=top_p,
             temperature=temperature,
             max_tokens=max_tokens,
             messages=[
                 {
-                    "role": msg["role"],
-                    "content": [{"type": "text", "text": msg["content"]}],
+                    "role": msg.role,
+                    "content": [{"type": "text", "text": msg.content}],
                 }
-                for msg in messages[1:]
+                for msg in messages
             ],
         )
 
@@ -178,13 +167,13 @@ class AnthropicInferenceClient(InferenceClient):
         self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
     ):
         system = None
-        if messages[0]["role"] == "system":
+        if messages[0].role == ChatRole.SYSTEM:
             system = {
                 "system": [
-                    {"type": "text", "text": messages[0]["content"]}
+                    {"type": "text", "text": messages[0].content}
                     | (
                         {"cache_control": {"type": "ephemeral"}}
-                        if messages[0].get("cache_marker")
+                        if messages[0].cache_marker
                         else {}
                     )
                 ]
@@ -197,10 +186,10 @@ class AnthropicInferenceClient(InferenceClient):
             "temperature": temperature,
             "max_tokens": max_tokens,
             "messages": [
-                {"role": msg["role"], "content": msg["content"]}
+                {"role": msg.role.value, "content": msg.content}
                 | (
                     {"cache_control": {"type": "ephemeral"}}
-                    if msg.get("cache_marker")
+                    if msg.cache_marker
                     else {}
                 )
                 for msg in messages
@@ -233,13 +222,13 @@ class AnthropicInferenceClient(InferenceClient):
     ):
 
         system = None
-        if messages[0]["role"] == "system":
+        if messages[0].role == ChatRole.SYSTEM:
             system = {
                 "system": [
-                    {"type": "text", "text": messages[0]["content"]}
+                    {"type": "text", "text": messages[0].content}
                     | (
                         {"cache_control": {"type": "ephemeral"}}
-                        if messages[0].get("cache_marker")
+                        if messages[0].cache_marker
                         else {}
                     )
                 ]
@@ -253,12 +242,12 @@ class AnthropicInferenceClient(InferenceClient):
             "max_tokens": max_tokens,
             "messages": [
                 {
-                    "role": msg["role"],
+                    "role": msg.role,
                     "content": [
-                        {"type": "text", "text": msg["content"]}
+                        {"type": "text", "text": msg.content}
                         | (
                             {"cache_control": {"type": "ephemeral"}}
-                            if msg.get("cache_marker")
+                            if msg.cache_marker
                             else {}
                         )
                     ],
@@ -283,12 +272,11 @@ class AnthropicInferenceClient(InferenceClient):
                     "anthropic-beta": "prompt-caching-2024-07-31",
                 },
             ) as response:
-                print("streaming status code:", response.status_code)
                 from pprint import pprint
 
                 async for line in response.aiter_lines():
                     if response.status_code != 200:
-                        message_logs = [{"role": msg["role"]} for msg in messages[1:]]
+                        message_logs = [{"role": msg.role} for msg in messages[1:]]
 
                     if line.startswith("data: "):
                         data = json.loads(line[6:])
@@ -316,21 +304,13 @@ class AnthropicInferenceClient(InferenceClient):
                         yield text
 
 
-@dataclass
-class OAIRequest:
+class OAIRequest(AsimovBase):
     model: str
     messages: List[Dict[str, Any]]
     max_tokens: int = 4096
     temperature: float = 1.0
     top_p: float = 1.0
     stream: bool = False
-
-
-@dataclass
-class OAIReasoningRequest:
-    model: str
-    messages: List[Dict[str, Any]]
-    max_tokens: int = 4096
 
 
 class OAIInferenceClient(InferenceClient):
@@ -345,10 +325,9 @@ class OAIInferenceClient(InferenceClient):
         self.api_key = api_key
 
     async def get_generation(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=1.0
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=1.0, temperature=0.5
     ):
         if self.model in ["o1-preview", "o1-mini"]:
-            print("REASONING_REQUEST")
             request = {
                 "model": self.model,
                 "messages": messages,
@@ -356,11 +335,12 @@ class OAIInferenceClient(InferenceClient):
         else:
             request = OAIRequest(
                 model=self.model,
-                messages=messages,
+                messages=[m.model_dump(exclude={"cache_marker"}) for m in messages],
                 max_tokens=max_tokens,
                 top_p=top_p,
+                temperature=temperature,
                 stream=False,
-            ).__dict__
+            ).model_dump()
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -379,15 +359,14 @@ class OAIInferenceClient(InferenceClient):
             return response.json()["choices"][0]["message"]["content"]
 
     async def connect_and_listen(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=1.0
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=1.0, temperature=0.5
     ):
         request = OAIRequest(
             model=self.model,
-            messages=[
-                {"role": msg["role"], "content": msg["content"]} for msg in messages
-            ],
+            messages=[msg.model_dump(exclude={"cache_marker"}) for msg in messages],
             max_tokens=max_tokens,
             top_p=top_p,
+            temperature=temperature,
             stream=True,
         )
 
