@@ -479,7 +479,14 @@ class Agent(AsimovBase):
                     for n in parallel_group["nodes"]
                 ):
                     dir = await self.snapshot(
-                        task, "-".join(sorted(parallel_group["nodes"]))
+                        task,
+                        "-".join(
+                            sorted(
+                                n
+                                for n in parallel_group["nodes"]
+                                if self.nodes[n].snapshot != SnapshotControl.NEVER
+                            )
+                        ),
                     )
                     self._logger.info(f"Snapshot: {dir}")
 
