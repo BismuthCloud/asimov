@@ -46,10 +46,8 @@ class ModuleType(Enum):
 
 
 class Middleware(AsimovBase):
-    async def process(
-        self, data: Dict[str, Any], cache: Cache
-    ) -> AsyncGenerator[Dict[str, Any], None]:
-        yield data
+    async def process(self, data: Dict[str, Any], cache: Cache) -> Dict[str, Any]:
+        return data
 
 
 class ModuleConfig(AsimovBase):
@@ -237,8 +235,7 @@ class CompositeModule(AgentModule):
         self, middlewares: List[Middleware], data: Dict[str, Any], cache: Cache
     ) -> Dict[str, Any]:
         for middleware in middlewares:
-            async for processed_data in middleware.process(data, cache):
-                data = processed_data
+            data = await middleware.process(data, cache)
         return data
 
     async def run_sequential_modules(

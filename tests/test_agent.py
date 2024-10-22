@@ -1008,11 +1008,9 @@ async def test_complex_graph_execution(simple_agent, mock_cache):
             return {"status": "success", "result": "Original result"}
 
     class TestMiddleware(Middleware):
-        async def process(
-            self, data: Dict[str, Any], cache: Cache
-        ) -> AsyncGenerator[Dict[str, Any], None]:
+        async def process(self, data: Dict[str, Any], cache: Cache) -> Dict[str, Any]:
             data["result"] = f"Modified: {data['result']}"
-            yield data
+            return data
 
     flow_config = FlowControlConfig(
         decisions=[
