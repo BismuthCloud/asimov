@@ -48,10 +48,6 @@ class AnthropicMessage:
     content: List[AnthropicMessageContent]
 
 
-class ModelFamily(Enum):
-    Anthropic = "Anthropic"
-
-
 class InferenceClient(ABC):
     @abstractmethod
     async def connect_and_listen(
@@ -67,10 +63,10 @@ class InferenceClient(ABC):
 
 
 class BedrockInferenceClient(InferenceClient):
-    def __init__(self, model: str):
+    def __init__(self, model: str, region_name="us-east-1"):
         self.model = model
+        self.region_name = region_name
         self.session = aioboto3.Session()
-        self.model_family = ModelFamily.Anthropic
         self.anthropic_version = "bedrock-2023-05-31"
 
     async def get_generation(
@@ -99,7 +95,7 @@ class BedrockInferenceClient(InferenceClient):
 
         async with self.session.client(
             service_name="bedrock-runtime",
-            region_name="us-east-1",
+            region_name=self.region_name,
         ) as client:
             response = await client.invoke_model(
                 body=json.dumps(body.__dict__),
@@ -179,16 +175,22 @@ class AnthropicInferenceClient(InferenceClient):
     async def get_generation(
         self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
     ):
+        system = None
+        if messages[0]["role"] == "system":
+            system = {
+                "system": [
+                    {"type": "text", "text": messages[0]["content"]}
+                    | (
+                        {"cache_control": {"type": "ephemeral"}}
+                        if messages[0].get("cache_marker")
+                        else {}
+                    )
+                ]
+            }
+            messages = messages[1:]
+
         request = {
             "model": self.model,
-            "system": [
-                {"type": "text", "text": messages[0]["content"]}
-                | (
-                    {"cache_control": {"type": "ephemeral"}}
-                    if messages[0].get("cache_marker")
-                    else {}
-                )
-            ],
             "top_p": top_p,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -199,10 +201,14 @@ class AnthropicInferenceClient(InferenceClient):
                     if msg.get("cache_marker")
                     else {}
                 )
-                for msg in messages[1:]
+                for msg in messages
             ],
             "stream": False,
         }
+
+        if system:
+            request.update(system)
+
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 self.api_url,
@@ -223,16 +229,23 @@ class AnthropicInferenceClient(InferenceClient):
     async def connect_and_listen(
         self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
     ):
+
+        system = None
+        if messages[0]["role"] == "system":
+            system = {
+                "system": [
+                    {"type": "text", "text": messages[0]["content"]}
+                    | (
+                        {"cache_control": {"type": "ephemeral"}}
+                        if messages[0].get("cache_marker")
+                        else {}
+                    )
+                ]
+            }
+            messages = messages[1:]
+
         request = {
             "model": self.model,
-            "system": [
-                {"type": "text", "text": messages[0]["content"]}
-                | (
-                    {"cache_control": {"type": "ephemeral"}}
-                    if messages[0].get("cache_marker")
-                    else {}
-                )
-            ],
             "top_p": top_p,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -248,10 +261,13 @@ class AnthropicInferenceClient(InferenceClient):
                         )
                     ],
                 }
-                for msg in messages[1:]
+                for msg in messages
             ],
             "stream": True,
         }
+
+        if system:
+            request.update(system)
 
         async with httpx.AsyncClient() as client:
             async with client.stream(
@@ -271,9 +287,6 @@ class AnthropicInferenceClient(InferenceClient):
                 async for line in response.aiter_lines():
                     if response.status_code != 200:
                         message_logs = [{"role": msg["role"]} for msg in messages[1:]]
-
-                        print(line)
-                        pprint(message_logs)
 
                     if line.startswith("data: "):
                         data = json.loads(line[6:])
