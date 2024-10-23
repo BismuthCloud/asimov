@@ -1,3 +1,4 @@
+from pydantic import Field
 import json
 from typing import List, Dict, Any
 from enum import Enum
@@ -24,6 +25,7 @@ class ChatMessage(AsimovBase):
     role: ChatRole
     content: str
     cache_marker: bool = False
+    model_families: List[str] = Field(default_factory=list)
 
 
 class AnthropicRequest(AsimovBase):
@@ -130,7 +132,7 @@ class BedrockInferenceClient(InferenceClient):
 
         async with self.session.client(
             service_name="bedrock-runtime",
-            region_name="us-east-1",
+            region_name=self.region_name,
         ) as client:
             response = await client.invoke_model_with_response_stream(
                 body=json.dumps(body.__dict__),
@@ -171,7 +173,7 @@ class BedrockInferenceClient(InferenceClient):
                 elif chunk_type == "message_delta":
                     opentelemetry.trace.get_current_span().set_attribute(
                         "inference.usage.output_tokens",
-                        chunk_json["delta"]["usage"]["output_tokens"],
+                        chunk_json["usage"]["output_tokens"],
                     )
 
 
@@ -314,11 +316,6 @@ class AnthropicInferenceClient(InferenceClient):
                 from pprint import pprint
 
                 async for line in response.aiter_lines():
-                    if response.status_code != 200:
-                        message_logs = [
-                            {"role": msg.role.value} for msg in messages[1:]
-                        ]
-
                     if line.startswith("data: "):
                         chunk_json = json.loads(line[6:])
                         chunk_type = chunk_json["type"]
@@ -351,7 +348,7 @@ class AnthropicInferenceClient(InferenceClient):
                         elif chunk_type == "message_delta":
                             opentelemetry.trace.get_current_span().set_attribute(
                                 "inference.usage.output_tokens",
-                                chunk_json["delta"]["usage"]["output_tokens"],
+                                chunk_json["usage"]["output_tokens"],
                             )
 
 

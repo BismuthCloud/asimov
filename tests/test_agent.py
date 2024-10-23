@@ -1247,7 +1247,7 @@ async def test_snapshotting(simple_agent, mock_cache):
     new_agent = Agent(cache=mock_cache)
     construct_flow(new_agent)
     await new_agent.run_from_snapshot(
-        pathlib.Path("/tmp/asimov_snapshot") / str(task.id) / "0_Node_1-Node_2"
+        pathlib.Path("/tmp/asimov_snapshot") / str(task.id) / "0_Node_1"
     )
     assert (await mock_cache.get("condition_var")) == True
     assert mods_run == {"node1"}
