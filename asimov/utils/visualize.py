@@ -1,99 +1,80 @@
 import graphviz
 
-def create_agent_graph(agent, output_file='agent_graph'):
+from asimov.graph import Agent, FlowControlModule
+
+
+def create_agent_graph(agent: Agent, output_file="agent_graph"):
     """
     Creates a DOT graph visualization of an Agent's nodes and their relationships.
-    
+
     Args:
         agent: The Agent object containing nodes and their relationships
         output_file: The name of the output file (without extension)
-    
+
     Returns:
         The path to the generated DOT file
     """
     # Create a new directed graph
-    dot = graphviz.Digraph(comment='Agent Node Graph')
-    dot.attr(rankdir='LR')  # Left to right layout
-    
+    dot = graphviz.Digraph(comment="Agent Node Graph")
+    dot.attr(rankdir="LR")  # Left to right layout
+
     # Add all nodes first
-    for node in agent.nodes:
-        # Create node with its name
-        node_attrs = {
-            'shape': 'box',
-            'style': 'rounded',
-            'label': node.name
-        }
-        dot.node(node.name, **node_attrs)
-    
+    for node in agent.nodes.values():
+        if node.modules:
+            with dot.subgraph(name=f"cluster_{node.name}") as sub:
+                sub.attr(label=node.name)
+                for mod in node.modules:
+                    sub.node(f"{node.name}__{mod.name}", label=mod.name)
+                for a, b in zip(node.modules, node.modules[1:]):
+                    sub.edge(f"{node.name}__{a.name}", f"{node.name}__{b.name}")
+        else:
+            dot.node(node.name)
+
     # Add edges for dependencies
-    for node in agent.nodes:
+    for node in agent.nodes.values():
         # Add dependency edges
         for dep in node.dependencies:
-            dot.edge(dep.name, node.name, color='blue', label='depends on')
-            
+            dot.edge(
+                (
+                    f"{dep}__{agent.nodes[dep].modules[0].name}"
+                    if agent.nodes[dep].modules
+                    else dep
+                ),
+                f"{node.name}__{node.modules[0].name}" if node.modules else node.name,
+            )
+
         # Add flow control edges
-        if hasattr(node, 'next_nodes'):
-            for next_node in node.next_nodes:
-                dot.edge(node.name, next_node.name, color='green', label='flow')
-                
-        # Add conditional edges if they exist
-        if hasattr(node, 'conditional_nodes'):
-            for condition, target in node.conditional_nodes.items():
-                dot.edge(node.name, target.name, 
-                        color='red', 
-                        label=f'if {condition}')
-    
+        for mod in node.modules:
+            if isinstance(mod, FlowControlModule):
+                for decision in mod.flow_config.decisions:
+                    dot.edge(
+                        f"{node.name}__{mod.name}",
+                        (
+                            f"{decision.next_node}__{agent.nodes[decision.next_node].modules[0].name}"
+                            if agent.nodes[decision.next_node].modules
+                            else decision.next_node
+                        ),
+                        label=decision.condition,
+                    )
+                if mod.flow_config.default:
+                    dot.edge(
+                        f"{node.name}__{mod.name}",
+                        (
+                            f"{mod.flow_config.default}__{agent.nodes[mod.flow_config.default].modules[0].name}"
+                            if agent.nodes[mod.flow_config.default].modules
+                            else mod.flow_config.default
+                        ),
+                        color="blue",
+                        label="default",
+                    )
+
     # Save the graph
     try:
         # Save as both .dot and rendered format
-        dot.save(f'{output_file}.dot')
-        # Also render as PDF for visualization
-        dot.render(output_file, view=False)
-        return f'{output_file}.dot'
+        dot.save(output_file)
+        # Also render as PNG for visualization
+        dot.render(output_file, format="png")
+        return f"{output_file}.dot"
     except Exception as e:
         print(f"Error saving graph: {e}")
         return None
-
-def visualize_agent(agent, output_file='agent_graph'):
-    """
-    Convenience function to visualize an agent's structure.
-    
-    Args:
-        agent: The Agent object to visualize
-        output_file: The name of the output file (without extension)
-    
-    Returns:
-        The path to the generated DOT file
-    """
-    return create_agent_graph(agent, output_file)
-
-if __name__ == '__main__':
-    # Example usage
-    class MockNode:
-        def __init__(self, name):
-            self.name = name
-            self.dependencies = []
-            self.next_nodes = []
-            self.conditional_nodes = {}
-    
-    class MockAgent:
-        def __init__(self):
-            self.nodes = []
-    
-    # Create a mock agent and nodes for testing
-    agent = MockAgent()
-    node1 = MockNode("Start")
-    node2 = MockNode("Process")
-    node3 = MockNode("End")
-    
-    # Set up relationships
-    node1.next_nodes = [node2]
-    node2.dependencies = [node1]
-    node2.next_nodes = [node3]
-    node3.dependencies = [node2]
-    
-    agent.nodes = [node1, node2, node3]
-    
-    # Generate visualization
-    create_agent_graph(agent, "test_graph")
-
