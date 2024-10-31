@@ -39,6 +39,21 @@ class AnthropicRequest(AsimovBase):
 
 
 class InferenceClient(ABC):
+    _input_tokens: int = 0
+    _output_tokens: int = 0
+
+    def _account_input_tokens(self, tokens):
+        self._input_tokens += tokens
+        opentelemetry.trace.get_current_span().set_attribute(
+            "inference.usage.input_tokens", tokens
+        )
+
+    def _account_output_tokens(self, tokens):
+        self._output_tokens += tokens
+        opentelemetry.trace.get_current_span().set_attribute(
+            "inference.usage.output_tokens", tokens
+        )
+
     @abstractmethod
     async def connect_and_listen(
         self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
@@ -97,12 +112,8 @@ class BedrockInferenceClient(InferenceClient):
 
             body: dict = json.loads(await response["body"].read())
 
-            opentelemetry.trace.get_current_span().set_attribute(
-                "inference.usage.input_tokens", body["usage"]["input_tokens"]
-            )
-            opentelemetry.trace.get_current_span().set_attribute(
-                "inference.usage.output_tokens", body["usage"]["output_tokens"]
-            )
+            self._account_input_tokens(body["usage"]["input_tokens"])
+            self._account_output_tokens(body["usage"]["output_tokens"])
 
             return body["content"][0]["text"]
 
@@ -154,8 +165,7 @@ class BedrockInferenceClient(InferenceClient):
                     )
                     yield text
                 elif chunk_type == "message_start":
-                    opentelemetry.trace.get_current_span().set_attribute(
-                        "inference.usage.input_tokens",
+                    self._account_input_tokens(
                         chunk_json["message"]["usage"]["input_tokens"]
                         + chunk_json["message"]["usage"].get(
                             "cache_read_input_tokens", 0
@@ -171,10 +181,7 @@ class BedrockInferenceClient(InferenceClient):
                         ),
                     )
                 elif chunk_type == "message_delta":
-                    opentelemetry.trace.get_current_span().set_attribute(
-                        "inference.usage.output_tokens",
-                        chunk_json["usage"]["output_tokens"],
-                    )
+                    self._account_output_tokens(chunk_json["usage"]["output_tokens"])
 
 
 class AnthropicInferenceClient(InferenceClient):
@@ -240,8 +247,7 @@ class AnthropicInferenceClient(InferenceClient):
 
             body: dict = response.json()
 
-            opentelemetry.trace.get_current_span().set_attribute(
-                "inference.usage.input_tokens",
+            self._account_input_tokens(
                 # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#tracking-cache-performance
                 body["usage"]["input_tokens"]
                 + body["usage"].get("cache_read_input_tokens", 0)
@@ -251,9 +257,7 @@ class AnthropicInferenceClient(InferenceClient):
                 "inference.usage.cached_input_tokens",
                 body["usage"].get("cache_read_input_tokens", 0),
             )
-            opentelemetry.trace.get_current_span().set_attribute(
-                "inference.usage.output_tokens", body["usage"]["output_tokens"]
-            )
+            self._account_output_tokens(body["usage"]["output_tokens"])
 
             return body["content"][0]["text"]
 
@@ -313,8 +317,6 @@ class AnthropicInferenceClient(InferenceClient):
                     "anthropic-beta": "prompt-caching-2024-07-31",
                 },
             ) as response:
-                from pprint import pprint
-
                 async for line in response.aiter_lines():
                     if line.startswith("data: "):
                         chunk_json = json.loads(line[6:])
@@ -329,8 +331,7 @@ class AnthropicInferenceClient(InferenceClient):
                             )
                             yield text
                         elif chunk_type == "message_start":
-                            opentelemetry.trace.get_current_span().set_attribute(
-                                "inference.usage.input_tokens",
+                            self._account_input_tokens(
                                 chunk_json["message"]["usage"]["input_tokens"]
                                 + chunk_json["message"]["usage"].get(
                                     "cache_read_input_tokens", 0
@@ -346,8 +347,7 @@ class AnthropicInferenceClient(InferenceClient):
                                 ),
                             )
                         elif chunk_type == "message_delta":
-                            opentelemetry.trace.get_current_span().set_attribute(
-                                "inference.usage.output_tokens",
+                            self._account_output_tokens(
                                 chunk_json["usage"]["output_tokens"],
                             )
 
@@ -407,16 +407,12 @@ class OAIInferenceClient(InferenceClient):
 
             body: dict = response.json()
 
-            opentelemetry.trace.get_current_span().set_attribute(
-                "inference.usage.input_tokens", body["usage"]["prompt_tokens"]
-            )
+            self._account_input_tokens(body["usage"]["prompt_tokens"])
             opentelemetry.trace.get_current_span().set_attribute(
                 "inference.usage.cached_input_tokens",
                 body["usage"].get("prompt_tokens_details", {}).get("cached_tokens", 0),
             )
-            opentelemetry.trace.get_current_span().set_attribute(
-                "inference.usage.output_tokens", body["usage"]["completion_tokens"]
-            )
+            self._account_output_tokens(body["usage"]["completion_tokens"])
 
             return body["choices"][0]["message"]["content"]
 
@@ -457,10 +453,7 @@ class OAIInferenceClient(InferenceClient):
                         ):
                             yield data["choices"][0]["delta"]["content"]
                         elif data.get("usage"):
-                            opentelemetry.trace.get_current_span().set_attribute(
-                                "inference.usage.input_tokens",
-                                data["usage"]["prompt_tokens"],
-                            )
+                            self._account_input_tokens(data["usage"]["prompt_tokens"])
                             # No reference to cached tokens in the docs for the streaming API response objects...
                             opentelemetry.trace.get_current_span().set_attribute(
                                 "inference.usage.cached_input_tokens",
@@ -468,7 +461,6 @@ class OAIInferenceClient(InferenceClient):
                                 .get("prompt_tokens_details", {})
                                 .get("cached_tokens", 0),
                             )
-                            opentelemetry.trace.get_current_span().set_attribute(
-                                "inference.usage.output_tokens",
-                                data["usage"]["completion_tokens"],
+                            self._account_output_tokens(
+                                data["usage"]["completion_tokens"]
                             )
