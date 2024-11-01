@@ -483,20 +483,23 @@ class VertexInferenceClient(InferenceClient):
         else:
             model = vertexai.generative_models.GenerativeModel(self.model)
 
-        return (
-            await model.generate_content_async(
-                [
-                    vertexai.generative_models.Content(
-                        role=msg.role.value,
-                        parts=[vertexai.generative_models.Part.from_text(msg.content)],
-                    )
-                    for msg in messages
-                ],
-                generation_config=vertexai.generative_models.GenerationConfig(
-                    max_output_tokens=max_tokens, top_p=top_p, temperature=temperature
-                ),
-            )
-        ).text
+        resp = await model.generate_content_async(
+            [
+                vertexai.generative_models.Content(
+                    role=msg.role.value,
+                    parts=[vertexai.generative_models.Part.from_text(msg.content)],
+                )
+                for msg in messages
+            ],
+            generation_config=vertexai.generative_models.GenerationConfig(
+                max_output_tokens=max_tokens, top_p=top_p, temperature=temperature
+            ),
+        )
+
+        self._account_input_tokens(resp.usage_metadata.prompt_token_count)
+        self._account_output_tokens(resp.usage_metadata.candidates_token_count)
+
+        return resp.text
 
     @tracer.start_as_current_span(name="VertexInferenceClient.connect_and_listen")
     async def connect_and_listen(
@@ -521,5 +524,9 @@ class VertexInferenceClient(InferenceClient):
             generation_config=vertexai.generative_models.GenerationConfig(
                 max_output_tokens=max_tokens, top_p=top_p, temperature=temperature
             ),
+            stream=True,
         ):
             yield chunk.text
+            if chunk.usage_metadata:
+                self._account_input_tokens(chunk.usage_metadata.prompt_token_count)
+                self._account_output_tokens(chunk.usage_metadata.candidates_token_count)
