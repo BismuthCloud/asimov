@@ -8,6 +8,7 @@ import aioboto3
 import httpx
 import opentelemetry.instrumentation.httpx
 import opentelemetry.trace
+import vertexai.generative_models
 
 from asimov.asimov_base import AsimovBase
 
@@ -464,3 +465,61 @@ class OAIInferenceClient(InferenceClient):
                             self._account_output_tokens(
                                 data["usage"]["completion_tokens"]
                             )
+
+
+class VertexInferenceClient(InferenceClient):
+    def __init__(self, model: str):
+        self.model = model
+
+    @tracer.start_as_current_span(name="VertexInferenceClient.get_generation")
+    async def get_generation(
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
+    ):
+        if messages[0].role == ChatRole.SYSTEM:
+            model = vertexai.generative_models.GenerativeModel(
+                self.model, system_instruction=messages[0].content
+            )
+            messages = messages[1:]
+        else:
+            model = vertexai.generative_models.GenerativeModel(self.model)
+
+        return (
+            await model.generate_content_async(
+                [
+                    vertexai.generative_models.Content(
+                        role=msg.role.value,
+                        parts=[vertexai.generative_models.Part.from_text(msg.content)],
+                    )
+                    for msg in messages
+                ],
+                generation_config=vertexai.generative_models.GenerationConfig(
+                    max_output_tokens=max_tokens, top_p=top_p, temperature=temperature
+                ),
+            )
+        ).text
+
+    @tracer.start_as_current_span(name="VertexInferenceClient.connect_and_listen")
+    async def connect_and_listen(
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
+    ):
+        if messages[0].role == ChatRole.SYSTEM:
+            model = vertexai.generative_models.GenerativeModel(
+                self.model, system_instruction=messages[0].content
+            )
+            messages = messages[1:]
+        else:
+            model = vertexai.generative_models.GenerativeModel(self.model)
+
+        async for chunk in model.generate_content_async(
+            [
+                vertexai.generative_models.Content(
+                    role=msg.role.value,
+                    parts=[vertexai.generative_models.Part.from_text(msg.content)],
+                )
+                for msg in messages
+            ],
+            generation_config=vertexai.generative_models.GenerationConfig(
+                max_output_tokens=max_tokens, top_p=top_p, temperature=temperature
+            ),
+        ):
+            yield chunk.text
