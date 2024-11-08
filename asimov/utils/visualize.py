@@ -50,7 +50,7 @@ def create_agent_graph(agent: Agent, output_file="agent_graph"):
                     dot.edge(
                         f"{node.name}__{mod.name}",
                         (
-                            f"{decision.next_node}__{agent.nodes[decision.next_node].modules[-1].name}"
+                            f"{decision.next_node}__{agent.nodes[decision.next_node].modules[0].name}"
                             if agent.nodes[decision.next_node].modules
                             else decision.next_node
                         ),
@@ -60,7 +60,7 @@ def create_agent_graph(agent: Agent, output_file="agent_graph"):
                     dot.edge(
                         f"{node.name}__{mod.name}",
                         (
-                            f"{mod.flow_config.default}__{agent.nodes[mod.flow_config.default].modules[-1].name}"
+                            f"{mod.flow_config.default}__{agent.nodes[mod.flow_config.default].modules[0].name}"
                             if agent.nodes[mod.flow_config.default].modules
                             else mod.flow_config.default
                         ),

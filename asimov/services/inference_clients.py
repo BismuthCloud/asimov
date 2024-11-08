@@ -1,6 +1,7 @@
+import asyncio
 from pydantic import Field
 import json
-from typing import List, Dict, Any
+from typing import Callable, List, Dict, Any, Tuple
 from enum import Enum
 from abc import ABC, abstractmethod
 
@@ -9,6 +10,7 @@ import httpx
 import opentelemetry.instrumentation.httpx
 import opentelemetry.trace
 import vertexai.generative_models
+import google.api_core.exceptions
 
 from asimov.asimov_base import AsimovBase
 
@@ -20,6 +22,7 @@ class ChatRole(Enum):
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
+    TOOL_RESULT = "tool_result"
 
 
 class ChatMessage(AsimovBase):
@@ -33,6 +36,8 @@ class AnthropicRequest(AsimovBase):
     anthropic_version: str
     system: str
     messages: List[Dict[str, Any]]
+    tools: List[Dict[str, Any]] = Field(default_factory=list)
+    tool_choice: Dict[str, Any] = Field(default_factory=dict)
     max_tokens: int = 512
     temperature: float = 0.5
     top_p: float = 0.9
@@ -77,7 +82,11 @@ class BedrockInferenceClient(InferenceClient):
 
     @tracer.start_as_current_span(name="BedrockInferenceClient.get_generation")
     async def get_generation(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
+        self,
+        messages: List[ChatMessage],
+        max_tokens=4096,
+        top_p=0.5,
+        temperature=0.5,
     ):
 
         system = ""
@@ -105,7 +114,7 @@ class BedrockInferenceClient(InferenceClient):
             region_name=self.region_name,
         ) as client:
             response = await client.invoke_model(
-                body=request.model_dump_json(),
+                body=request.model_dump_json(exclude={"tools", "tool_choice"}),
                 modelId=self.model,
                 contentType="application/json",
                 accept="application/json",
@@ -118,16 +127,97 @@ class BedrockInferenceClient(InferenceClient):
 
             return body["content"][0]["text"]
 
+    @tracer.start_as_current_span(name="BedrockInferenceClient.tool_chain")
+    async def tool_chain(
+        self,
+        messages: List[ChatMessage],
+        tools: List[Tuple[Callable, Dict[str, Any]]],
+        max_tokens=4096,
+        top_p=0.5,
+        temperature=0.5,
+        max_iterations=10,
+    ):
+        tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
+
+        system = ""
+        if messages[0].role == ChatRole.SYSTEM:
+            system = messages[0].content
+            messages = messages[1:]
+
+        serialized_messages = [
+            {
+                "role": msg.role.value,
+                "content": [{"type": "text", "text": msg.content}],
+            }
+            for msg in messages
+        ]
+
+        async with self.session.client(
+            service_name="bedrock-runtime",
+            region_name=self.region_name,
+        ) as client:
+            for _ in range(max_iterations):
+                request = AnthropicRequest(
+                    anthropic_version=self.anthropic_version,
+                    system=system,
+                    top_p=top_p,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    messages=serialized_messages,
+                    tools=[x[1] for x in tools],
+                    tool_choice={"type": "any"},
+                )
+
+                response = await client.invoke_model(
+                    body=request.model_dump_json(),
+                    modelId=self.model,
+                    contentType="application/json",
+                    accept="application/json",
+                )
+
+                body: dict = json.loads(await response["body"].read())
+
+                self._account_input_tokens(body["usage"]["input_tokens"])
+                self._account_output_tokens(body["usage"]["output_tokens"])
+
+                serialized_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": body["content"],
+                    }
+                )
+                call = body["content"][0]
+                try:
+                    result = await tool_funcs[call["name"]](call["input"])
+                except StopAsyncIteration:
+                    return
+                serialized_messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": call["id"],
+                                "content": result,
+                            }
+                        ],
+                    }
+                )
+
     @tracer.start_as_current_span(name="BedrockInferenceClient.connect_and_listen")
     async def connect_and_listen(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
+        self,
+        messages: List[ChatMessage],
+        max_tokens=4096,
+        top_p=0.5,
+        temperature=0.5,
     ):
         system = ""
         if messages[0].role == ChatRole.SYSTEM:
             system = messages[0].content
             messages = messages[1:]
 
-        body = AnthropicRequest(
+        request = AnthropicRequest(
             anthropic_version=self.anthropic_version,
             system=system,
             top_p=top_p,
@@ -147,7 +237,7 @@ class BedrockInferenceClient(InferenceClient):
             region_name=self.region_name,
         ) as client:
             response = await client.invoke_model_with_response_stream(
-                body=json.dumps(body.__dict__),
+                body=request.model_dump_json(exclude={"tools", "tool_choice"}),
                 modelId=self.model,
                 contentType="application/json",
                 accept="application/json",
@@ -352,6 +442,104 @@ class AnthropicInferenceClient(InferenceClient):
                                 chunk_json["usage"]["output_tokens"],
                             )
 
+    @tracer.start_as_current_span(name="AnthropicInferenceClient.tool_chain")
+    async def tool_chain(
+        self,
+        messages: List[ChatMessage],
+        tools: List[Tuple[Callable, Dict[str, Any]]],
+        max_tokens=4096,
+        top_p=0.5,
+        temperature=0.5,
+        max_iterations=10,
+    ):
+        tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
+
+        system = None
+        if messages[0].role == ChatRole.SYSTEM:
+            system = {
+                "system": [
+                    {"type": "text", "text": messages[0].content}
+                    | (
+                        {"cache_control": {"type": "ephemeral"}}
+                        if messages[0].cache_marker
+                        else {}
+                    )
+                ]
+            }
+            messages = messages[1:]
+
+        serialized_messages = [
+            {
+                "role": msg.role.value,
+                "content": [{"type": "text", "text": msg.content}],
+            }
+            for msg in messages
+        ]
+
+        async with httpx.AsyncClient() as client:
+            for _ in range(max_iterations):
+                request = {
+                    "model": self.model,
+                    "top_p": top_p,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "messages": serialized_messages,
+                    "stream": False,
+                    "tools": [x[1] for x in tools],
+                    "tool_choice": {"type": "any"},
+                }
+                if system:
+                    request.update(system)
+
+                response = await client.post(
+                    self.api_url,
+                    timeout=300000,
+                    json=request,
+                    headers={
+                        "x-api-key": self.api_key,
+                        "anthropic-version": "2023-06-01",
+                        "anthropic-beta": "prompt-caching-2024-07-31",
+                    },
+                )
+
+                if response.status_code != 200:
+                    print(await response.aread())
+                    response.raise_for_status()
+
+                body: dict = response.json()
+
+                self._account_input_tokens(
+                    # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#tracking-cache-performance
+                    body["usage"]["input_tokens"]
+                    + body["usage"].get("cache_read_input_tokens", 0)
+                    + body["usage"].get("cache_creation_input_tokens", 0),
+                )
+                self._account_output_tokens(body["usage"]["output_tokens"])
+
+                serialized_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": body["content"],
+                    }
+                )
+                call = body["content"][0]
+                try:
+                    result = await tool_funcs[call["name"]](call["input"])
+                except StopAsyncIteration:
+                    return
+                serialized_messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": call["id"],
+                                "content": result,
+                            }
+                        ],
+                    }
+                )
+
 
 class OAIRequest(AsimovBase):
     model: str
@@ -473,7 +661,12 @@ class VertexInferenceClient(InferenceClient):
 
     @tracer.start_as_current_span(name="VertexInferenceClient.get_generation")
     async def get_generation(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
+        self,
+        messages: List[ChatMessage],
+        max_tokens=4096,
+        top_p=0.5,
+        temperature=0.5,
+        schema=None,
     ):
         if messages[0].role == ChatRole.SYSTEM:
             model = vertexai.generative_models.GenerativeModel(
@@ -483,18 +676,39 @@ class VertexInferenceClient(InferenceClient):
         else:
             model = vertexai.generative_models.GenerativeModel(self.model)
 
-        resp = await model.generate_content_async(
-            [
-                vertexai.generative_models.Content(
-                    role=msg.role.value,
-                    parts=[vertexai.generative_models.Part.from_text(msg.content)],
+        prefill = ""
+        if schema and messages[-1].role == ChatRole.ASSISTANT:
+            prefill = messages[-1].content
+            messages = messages[:-1]
+
+        for retry in range(4):
+            try:
+                resp = await model.generate_content_async(
+                    [
+                        vertexai.generative_models.Content(
+                            role=msg.role.value,
+                            parts=[
+                                vertexai.generative_models.Part.from_text(msg.content)
+                            ],
+                        )
+                        for msg in messages
+                    ],
+                    generation_config=vertexai.generative_models.GenerationConfig(
+                        max_output_tokens=max_tokens,
+                        top_p=top_p,
+                        temperature=temperature,
+                        response_mime_type="application/json" if schema else None,
+                        response_schema=schema,
+                    ),
                 )
-                for msg in messages
-            ],
-            generation_config=vertexai.generative_models.GenerationConfig(
-                max_output_tokens=max_tokens, top_p=top_p, temperature=temperature
-            ),
-        )
+                if schema:
+                    resp.text = resp.text[len(prefill) :]
+                break
+            except google.api_core.exceptions.ResourceExhausted:
+                print("backoff retry")
+                await asyncio.sleep(2**retry)
+        else:
+            raise
 
         self._account_input_tokens(resp.usage_metadata.prompt_token_count)
         self._account_output_tokens(resp.usage_metadata.candidates_token_count)
