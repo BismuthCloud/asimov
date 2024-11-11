@@ -84,7 +84,7 @@ class BedrockInferenceClient(InferenceClient):
     async def get_generation(
         self,
         messages: List[ChatMessage],
-        max_tokens=4096,
+        max_tokens=8192,
         top_p=0.5,
         temperature=0.5,
     ):
@@ -132,7 +132,7 @@ class BedrockInferenceClient(InferenceClient):
         self,
         messages: List[ChatMessage],
         tools: List[Tuple[Callable, Dict[str, Any]]],
-        max_tokens=4096,
+        max_tokens=8192,
         top_p=0.5,
         temperature=0.5,
         max_iterations=10,
@@ -190,7 +190,7 @@ class BedrockInferenceClient(InferenceClient):
                 try:
                     result = await tool_funcs[call["name"]](call["input"])
                 except StopAsyncIteration:
-                    return
+                    return serialized_messages
                 serialized_messages.append(
                     {
                         "role": "user",
@@ -204,11 +204,13 @@ class BedrockInferenceClient(InferenceClient):
                     }
                 )
 
+        return serialized_messages
+
     @tracer.start_as_current_span(name="BedrockInferenceClient.connect_and_listen")
     async def connect_and_listen(
         self,
         messages: List[ChatMessage],
-        max_tokens=4096,
+        max_tokens=8192,
         top_p=0.5,
         temperature=0.5,
     ):
@@ -288,7 +290,7 @@ class AnthropicInferenceClient(InferenceClient):
 
     @tracer.start_as_current_span(name="AnthropicInferenceClient.get_generation")
     async def get_generation(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
+        self, messages: List[ChatMessage], max_tokens=8192, top_p=0.5, temperature=0.5
     ):
         system = None
         if messages[0].role == ChatRole.SYSTEM:
@@ -354,7 +356,7 @@ class AnthropicInferenceClient(InferenceClient):
 
     @tracer.start_as_current_span(name="AnthropicInferenceClient.connect_and_listen")
     async def connect_and_listen(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
+        self, messages: List[ChatMessage], max_tokens=8192, top_p=0.5, temperature=0.5
     ):
 
         system = None
@@ -447,7 +449,7 @@ class AnthropicInferenceClient(InferenceClient):
         self,
         messages: List[ChatMessage],
         tools: List[Tuple[Callable, Dict[str, Any]]],
-        max_tokens=4096,
+        max_tokens=8192,
         top_p=0.5,
         temperature=0.5,
         max_iterations=10,
@@ -526,7 +528,7 @@ class AnthropicInferenceClient(InferenceClient):
                 try:
                     result = await tool_funcs[call["name"]](call["input"])
                 except StopAsyncIteration:
-                    return
+                    return serialized_messages
                 serialized_messages.append(
                     {
                         "role": "user",
@@ -539,6 +541,8 @@ class AnthropicInferenceClient(InferenceClient):
                         ],
                     }
                 )
+
+        return serialized_messages
 
 
 class OAIRequest(AsimovBase):
