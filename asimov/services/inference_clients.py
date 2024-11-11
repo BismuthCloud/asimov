@@ -165,7 +165,7 @@ class BedrockInferenceClient(InferenceClient):
                     max_tokens=max_tokens,
                     messages=serialized_messages,
                     tools=[x[1] for x in tools],
-                    tool_choice={"type": "any"},
+                    tool_choice={"type": "auto"},
                 )
 
                 response = await client.invoke_model(
@@ -186,7 +186,10 @@ class BedrockInferenceClient(InferenceClient):
                         "content": body["content"],
                     }
                 )
-                call = body["content"][0]
+                call = next((c for c in body["content"] if c["type"] == "tool_use"), None)
+                if not call:
+                    return serialized_messages
+
                 try:
                     result = await tool_funcs[call["name"]](call["input"])
                 except StopAsyncIteration:
@@ -488,7 +491,7 @@ class AnthropicInferenceClient(InferenceClient):
                     "messages": serialized_messages,
                     "stream": False,
                     "tools": [x[1] for x in tools],
-                    "tool_choice": {"type": "any"},
+                    "tool_choice": {"type": "auto"},
                 }
                 if system:
                     request.update(system)
@@ -524,7 +527,10 @@ class AnthropicInferenceClient(InferenceClient):
                         "content": body["content"],
                     }
                 )
-                call = body["content"][0]
+                call = next((c for c in body["content"] if c["type"] == "tool_use"), None)
+                if not call:
+                    return serialized_messages
+
                 try:
                     result = await tool_funcs[call["name"]](call["input"])
                 except StopAsyncIteration:
