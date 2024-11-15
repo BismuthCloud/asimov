@@ -136,6 +136,7 @@ class BedrockInferenceClient(InferenceClient):
         top_p=0.5,
         temperature=0.5,
         max_iterations=10,
+        tool_choice="any", # Force a tool to be used
     ):
         tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
@@ -165,7 +166,7 @@ class BedrockInferenceClient(InferenceClient):
                     max_tokens=max_tokens,
                     messages=serialized_messages,
                     tools=[x[1] for x in tools],
-                    tool_choice={"type": "auto"},
+                    tool_choice={"type": tool_choice},
                 )
 
                 response = await client.invoke_model(
@@ -456,6 +457,7 @@ class AnthropicInferenceClient(InferenceClient):
         top_p=0.5,
         temperature=0.5,
         max_iterations=10,
+        tool_choice="any",
     ):
         tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
@@ -491,7 +493,7 @@ class AnthropicInferenceClient(InferenceClient):
                     "messages": serialized_messages,
                     "stream": False,
                     "tools": [x[1] for x in tools],
-                    "tool_choice": {"type": "auto"},
+                    "tool_choice": {"type": tool_choice},
                 }
                 if system:
                     request.update(system)
