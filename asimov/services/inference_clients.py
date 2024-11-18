@@ -593,13 +593,6 @@ class AnthropicInferenceClient(InferenceClient):
                         serialized_messages[0]
                     ] + serialized_messages[1:][-keep_n_states:]
 
-                print(
-                    [
-                        msg["content"][0].get("cache_control", None)
-                        for msg in serialized_messages
-                    ]
-                )
-
         return serialized_messages
 
 
