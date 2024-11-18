@@ -1,183 +1,136 @@
 [![PyPI - Version](https://img.shields.io/pypi/v/asimov_agents.svg)](https://pypi.org/project/asimov_agents)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/asimov_agents.svg)](https://pypi.org/project/asimov_agents)
 
-# Asimov
+# Asimov Agents
 
-Asimov is a powerful graph-based inference and caching system with Redis support. It provides a flexible framework for building and executing agentic workflows while efficiently managing data through various data caching mechanisms.
+A Python framework for building AI agent systems with robust task management, inference capabilities, and caching.
 
-## Features
+## System Overview
 
-- Graph-based workflow execution
-- Multiple inference client implementations (Anthropic, OpenAI, Vertex AI, Bedrock)
-- Redis-backed caching system with mock implementation for testing
-- Asynchronous operation support
-- Mailbox system for message passing between components
-- Comprehensive test coverage
+Asimov Agents is composed of three main components:
 
-## Installation
+1. **Task Graph System**
+   - Manages task execution flow and dependencies
+   - Supports different task states (WAITING, EXECUTING, COMPLETE, FAILED, PARTIAL)
+   - Uses Pydantic models for robust data validation
+   - Unique task identification via UUIDs
 
-```bash
-pip install asimov_agents
+2. **Inference Clients**
+   - Supports multiple LLM providers:
+     - Anthropic Claude (via API)
+     - AWS Bedrock
+   - Features:
+     - Streaming responses
+     - Tool/function calling capabilities
+     - Token usage tracking
+     - OpenTelemetry instrumentation
+     - Prompt caching support
+
+3. **Caching System**
+   - Abstract Cache interface with Redis implementation
+   - Features:
+     - Key-value storage with JSON serialization
+     - Prefix/suffix namespacing
+     - Pub/sub messaging via mailboxes
+     - Bulk operations (get_all, clear)
+     - Async interface
+
+## Component Interactions
+
+### Task Management
+- Tasks are created and tracked using the `Task` class
+- Each task has:
+  - Unique ID
+  - Type and objective
+  - Parameters dictionary
+  - Status tracking
+  - Result/error storage
+
+### Inference Pipeline
+1. Messages are formatted with appropriate roles (SYSTEM, USER, ASSISTANT, TOOL_RESULT)
+2. Inference clients handle:
+   - Message formatting
+   - API communication
+   - Response streaming
+   - Token accounting
+   - Error handling
+
+### Caching Layer
+- Redis cache provides:
+  - Fast key-value storage
+  - Message queuing
+  - Namespace management
+  - Atomic operations
+
+## Setup and Configuration
+
+### Redis Cache Setup
+```python
+cache = RedisCache(
+    host="localhost",  # Redis host
+    port=6379,        # Redis port
+    db=0,             # Database number
+    password=None,    # Optional password
+    default_prefix="" # Optional key prefix
+)
 ```
 
-### Requirements
-
-- Python 3.7+
-- Redis server (for production use)
-- Optional: Various AI service API keys depending on which inference clients you use
-
-## Quick Start
-
-Here's a basic example of setting up and using Asimov:
-
+### Inference Client Setup
 ```python
-from asimov.caches.redis_cache import RedisCache
-from asimov.services.inference_clients import InferenceClient, ChatMessage, ChatRole
-
-# Initialize cache
-cache = RedisCache(host='localhost', port=6379)
-
-# Create inference client
-client = InferenceClient(cache=cache)
-
-# Use the system
-messages = [
-    ChatMessage(role=ChatRole.SYSTEM, content="You are a helpful assistant."),
-    ChatMessage(role=ChatRole.USER, content="Hello!")
-]
-response = await client.get_generation(messages)
-```
-
-## Core Components
-
-### Cache System
-
-The cache system provides a Redis-backed storage solution with support for both simple key-value operations and more complex messaging patterns:
-
-```python
-# Basic cache operations
-await cache.set("key", {"value": 42})
-result = await cache.get("key")
-
-# Mailbox functionality
-await cache.publish_to_mailbox("mailbox_id", {"message": "hello"})
-message = await cache.get_message("mailbox_id", timeout=1)
-```
-
-### Graph Module
-
-The graph module allows you to create and execute complex workflows using different types of modules:
-
-```python
-from asimov.graph import AgentModule, ModuleType
-
-class CustomModule(AgentModule):
-    name = "custom_module"
-    type = ModuleType.EXECUTOR
-    
-    async def process(self, cache, semaphore):
-        # Your custom processing logic here
-        return {"status": "success", "result": "processing complete"}
-
-# Execute module
-module = CustomModule()
-result = await module.run(cache, semaphore)
-```
-
-Available module types:
-- PLANNER: For modules that plan or coordinate workflows
-- EXECUTOR: For modules that perform specific tasks
-- FLOW_CONTROL: For modules that control workflow execution
-
-### Inference Clients
-
-Asimov supports multiple inference clients for different AI services:
-
-- Anthropic (Claude)
-- OpenAI
-- Vertex AI
-- Bedrock
-
-Each client provides a consistent interface for making inference requests:
-
-```python
-# Example with Anthropic client
-from asimov.services.inference_clients import AnthropicInferenceClient
-
+# Anthropic Client
 client = AnthropicInferenceClient(
-    model="claude-2",
-    api_key="your-api-key"
+    model="claude-3",
+    api_key="your-api-key",
+    api_url="https://api.anthropic.com/v1/messages"
 )
 
-response = await client.get_generation(messages)
-
-# Streaming responses
-async for chunk in client.connect_and_listen(messages):
-    print(chunk)
+# AWS Bedrock Client
+client = BedrockInferenceClient(
+    model="anthropic.claude-3",
+    region_name="us-east-1"
+)
 ```
 
-## Testing
-
-Asimov provides a mock Redis implementation for testing:
-
+### Task Creation
 ```python
-from asimov.caches.mock_redis_cache import MockRedisCache
-
-# Use mock cache in tests
-cache = MockRedisCache()
-await cache.set("test_key", "test_value")
-
-# Clean up after tests
-await cache.clear()
-await cache.close()
+task = Task(
+    type="processing",
+    objective="Process data",
+    params={"input": "data"}
+)
 ```
 
 ## Performance Considerations
 
-### Redis Caching Benefits
-- Reduces API calls to inference services
-- Provides fast access to frequently used data
-- Supports distributed caching across multiple instances
+### Caching
+- Use appropriate key prefixes/suffixes for namespace isolation
+- Consider timeout settings for blocking operations
+- Monitor Redis memory usage
+- Use raw mode when bypassing JSON serialization
 
-### Graph Execution Strategy
-- Parallel execution of independent modules
-- Efficient message passing through Redis mailboxes
-- Configurable retry and error handling
+### Inference
+- Token usage is tracked automatically
+- Streaming reduces time-to-first-token
+- Tool calls support iteration limits
+- Prompt caching can improve response times
 
-## Contributing
+### Task Management
+- Tasks support partial failure states
+- Use UUIDs for guaranteed uniqueness
+- Status transitions are atomic
 
-1. Fork the repository
-2. Create a feature branch
-3. Write tests for new functionality
-4. Implement your changes
-5. Submit a pull request
+## Development
 
-### Development Setup
-
+### Running Tests
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/asimov.git
-
-# Install development dependencies
-pip install -e ".[dev]"
-
-# Run tests
 pytest tests/
 ```
 
-### Code Style
-- Follow PEP 8 guidelines
-- Use type hints
-- Include docstrings for all public functions and classes
-- Write unit tests for new functionality
+### Required Dependencies
+- Redis server
+- Python 3.7+
+- See requirements.txt for Python packages
 
 ## License
 
-This project is licensed under the ApacheV2 License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- The Redis team for their excellent caching solution
-- Various AI service providers for their APIs
-- The open source community for their contributions
-Asimov is a powerful graph-based inference and caching system with Redis support. It provides a flexible framework for building and executing inference workflows while efficiently managing data through Redis caching.
+[Add your license information here]
