@@ -28,8 +28,8 @@ from asimov.caches.redis_cache import RedisCache
 class TextPlannerModule(AgentModule):
     """Plans text processing operations."""
     
-    name = "text_planner"
-    type = ModuleType.PLANNER
+    name: str = "text_planner"
+    type: ModuleType = ModuleType.PLANNER
 
     async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
         # Get the task from cache
@@ -56,8 +56,8 @@ class TextPlannerModule(AgentModule):
 class TextExecutorModule(AgentModule):
     """Executes text processing operations."""
     
-    name = "text_executor"
-    type = ModuleType.EXECUTOR
+    name: str = "text_executor"
+    type: ModuleType = ModuleType.EXECUTOR
 
     async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
         # Get the plan and task

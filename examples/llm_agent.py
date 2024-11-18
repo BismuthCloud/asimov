@@ -29,8 +29,10 @@ from asimov.services.inference_clients import AnthropicInferenceClient
 class LLMPlannerModule(AgentModule):
     """Uses LLM to plan task execution."""
     
-    name = "llm_planner"
-    type = ModuleType.PLANNER
+    name: str = "llm_planner"
+    type: ModuleType = ModuleType.PLANNER
+
+    client: AnthropicInferenceClient = None
 
     def __init__(self):
         super().__init__()
@@ -71,8 +73,10 @@ class LLMPlannerModule(AgentModule):
 class LLMExecutorModule(AgentModule):
     """Executes steps using LLM guidance."""
     
-    name = "llm_executor"
-    type = ModuleType.EXECUTOR
+    name: str = "llm_executor"
+    type: ModuleType = ModuleType.EXECUTOR
+
+    client: AnthropicInferenceClient = None
 
     def __init__(self):
         super().__init__()
@@ -144,8 +148,10 @@ class LLMExecutorModule(AgentModule):
 class LLMDiscriminatorModule(AgentModule):
     """Makes decisions about execution flow based on LLM analysis."""
     
-    name = "llm_discriminator"
-    type = ModuleType.DISCRIMINATOR
+    name: str = "llm_discriminator"
+    type: ModuleType = ModuleType.DISCRIMINATOR
+
+    client: AnthropicInferenceClient = None
 
     def __init__(self):
         super().__init__()
@@ -231,6 +237,8 @@ async def main():
         name="flow_control",
         type=ModuleType.FLOW_CONTROL,
         modules=[FlowControlModule(
+            name="flow_control",
+            type=ModuleType.FLOW_CONTROL,
             flow_config=FlowControlConfig(
                 decisions=[
                     FlowDecision(

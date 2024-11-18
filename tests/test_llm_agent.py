@@ -1,4 +1,5 @@
 import pytest
+import pytest_asyncio
 import asyncio
 from typing import Dict, Any, List
 from unittest.mock import MagicMock, AsyncMock
@@ -101,6 +102,8 @@ def llm_agent(mock_cache, mock_anthropic_client):
         name="flow_control",
         type=ModuleType.FLOW_CONTROL,
         modules=[FlowControlModule(
+            name="flow_control",
+            type=ModuleType.FLOW_CONTROL,
             flow_config=FlowControlConfig(
                 decisions=[
                     FlowDecision(

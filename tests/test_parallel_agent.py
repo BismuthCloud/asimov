@@ -73,6 +73,8 @@ def parallel_agent(mock_cache):
         name="flow_control",
         type=ModuleType.FLOW_CONTROL,
         modules=[FlowControlModule(
+            name="flow_control",
+            type=ModuleType.FLOW_CONTROL,
             flow_config=FlowControlConfig(
                 decisions=[
                     FlowDecision(

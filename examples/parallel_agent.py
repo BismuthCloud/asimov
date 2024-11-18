@@ -28,8 +28,8 @@ from asimov.caches.redis_cache import RedisCache
 class TaskSplitterModule(AgentModule):
     """Splits a large task into smaller subtasks for parallel processing."""
     
-    name = "task_splitter"
-    type = ModuleType.PLANNER
+    name: str = "task_splitter"
+    type: ModuleType = ModuleType.PLANNER
 
     async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
         task = await cache.get("task")
@@ -62,8 +62,8 @@ class TaskSplitterModule(AgentModule):
 class ParallelProcessorModule(AgentModule):
     """Processes subtasks in parallel."""
     
-    name = "parallel_processor"
-    type = ModuleType.EXECUTOR
+    name: str = "parallel_processor"
+    type: ModuleType = ModuleType.EXECUTOR
 
     async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
         subtasks = await cache.get("subtasks")
@@ -118,8 +118,8 @@ class ParallelProcessorModule(AgentModule):
 class ResultAggregatorModule(AgentModule):
     """Aggregates results from parallel processing."""
     
-    name = "result_aggregator"
-    type = ModuleType.EXECUTOR
+    name: str = "result_aggregator"
+    type: ModuleType = ModuleType.EXECUTOR
 
     async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
         completed_subtasks = await cache.get("completed_subtasks")

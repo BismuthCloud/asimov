@@ -7,7 +7,8 @@ import pickle
 import re
 import logging
 import opentelemetry.trace
-from typing import List, Dict, Any, AsyncGenerator, Optional, TypedDict
+from typing import List, Dict, Any, AsyncGenerator, Optional
+from typing_extensions import TypedDict
 from pydantic import (
     Field,
     PrivateAttr,
