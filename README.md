@@ -110,6 +110,83 @@ Asimov Agents is composed of three main components:
   - Namespace management
   - Atomic operations
 
+## Agent Primitives
+
+The Asimov Agents framework is built around several core primitives that enable flexible and powerful agent architectures:
+
+### Module Types
+The framework supports different types of modules through the `ModuleType` enum:
+- `PLANNER`: Strategic task planning and decomposition
+- `EXECUTOR`: Task execution and action implementation
+- `DISCRIMINATOR`: Decision making and filtering
+- `OBSERVER`: Monitoring and logging functionality
+- `SUBGRAPH`: Nested graph structures for hierarchical agents
+- `FLOW_CONTROL`: Execution flow and routing control
+
+### Agent Module
+The `AgentModule` is the base class for all agent components:
+```python
+class AgentModule:
+    name: str                   # Unique module identifier
+    type: ModuleType           # Module type classification
+    config: ModuleConfig       # Module configuration
+    dependencies: List[str]    # Module dependencies
+    input_mailboxes: List[str] # Input communication channels
+    output_mailbox: str        # Output communication channel
+    trace: bool                # OpenTelemetry tracing flag
+```
+
+### Node Configuration
+Nodes can be configured with various parameters through `NodeConfig`:
+```python
+class NodeConfig:
+    parallel: bool = False           # Enable parallel execution
+    condition: Optional[str] = None  # Execution condition
+    retry_on_failure: bool = True    # Auto-retry on failures
+    max_retries: int = 3            # Maximum retry attempts
+    max_visits: int = 5             # Maximum node visits
+    inputs: List[str] = []          # Required inputs
+    outputs: List[str] = []         # Expected outputs
+```
+
+### Flow Control
+Flow control enables dynamic execution paths:
+```python
+class FlowDecision:
+    next_node: str                    # Target node
+    condition: Optional[str] = None   # Jump condition
+    cleanup_on_jump: bool = False     # Cleanup on transition
+
+class FlowControlConfig:
+    decisions: List[FlowDecision]     # Decision rules
+    default: Optional[str] = None     # Default node
+    cleanup_on_default: bool = True   # Cleanup on default
+```
+
+### Middleware System
+Middleware allows for processing interception:
+```python
+class Middleware:
+    async def process(self, data: Dict[str, Any], cache: Cache) -> Dict[str, Any]:
+        return data  # Process or transform data
+```
+
+### Execution State
+The framework maintains execution state through:
+```python
+class ExecutionState:
+    execution_index: int              # Current execution position
+    current_plan: ExecutionPlan       # Active execution plan
+    execution_history: List[ExecutionPlan]  # Historical plans
+    total_iterations: int             # Total execution iterations
+```
+
+### Snapshot Control
+State persistence is managed through `SnapshotControl`:
+- `NEVER`: No snapshots taken
+- `ONCE`: Single snapshot capture
+- `ALWAYS`: Continuous state capture
+
 ## Setup and Configuration
 
 ### Redis Cache Setup
