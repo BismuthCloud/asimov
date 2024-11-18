@@ -72,6 +72,18 @@ class InferenceClient(ABC):
     ):
         pass
 
+    @abstractmethod
+    async def tool_chain(
+        messages: List[ChatMessage],
+        tools: List[Tuple[Callable, Dict[str, Any]]],
+        max_tokens=8192,
+        top_p=0.5,
+        temperature=0.5,
+        max_iterations=10,
+        tool_choice="any",
+    ):
+        pass
+
 
 class BedrockInferenceClient(InferenceClient):
     def __init__(self, model: str, region_name="us-east-1"):
@@ -136,7 +148,8 @@ class BedrockInferenceClient(InferenceClient):
         top_p=0.5,
         temperature=0.5,
         max_iterations=10,
-        tool_choice="any", # Force a tool to be used
+        tool_choice="any",
+        keep_n_states=None,
     ):
         tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
@@ -187,7 +200,10 @@ class BedrockInferenceClient(InferenceClient):
                         "content": body["content"],
                     }
                 )
-                call = next((c for c in body["content"] if c["type"] == "tool_use"), None)
+
+                call = next(
+                    (c for c in body["content"] if c["type"] == "tool_use"), None
+                )
                 if not call:
                     return serialized_messages
 
@@ -208,6 +224,10 @@ class BedrockInferenceClient(InferenceClient):
                     }
                 )
 
+                if keep_n_states:
+                    serialized_messages = [
+                        serialized_messages[0]
+                    ] + serialized_messages[1:][-keep_n_states:]
         return serialized_messages
 
     @tracer.start_as_current_span(name="BedrockInferenceClient.connect_and_listen")
@@ -458,6 +478,7 @@ class AnthropicInferenceClient(InferenceClient):
         temperature=0.5,
         max_iterations=10,
         tool_choice="any",
+        keep_n_states=None,
     ):
         tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
@@ -482,6 +503,13 @@ class AnthropicInferenceClient(InferenceClient):
             }
             for msg in messages
         ]
+        serialized_messages[-1]["content"][0] = serialized_messages[-1]["content"][
+            0
+        ] | (
+            {"cache_control": {"type": "ephemeral"}}
+            if messages[-1].cache_marker
+            else {}
+        )
 
         async with httpx.AsyncClient() as client:
             for _ in range(max_iterations):
@@ -529,7 +557,10 @@ class AnthropicInferenceClient(InferenceClient):
                         "content": body["content"],
                     }
                 )
-                call = next((c for c in body["content"] if c["type"] == "tool_use"), None)
+
+                call = next(
+                    (c for c in body["content"] if c["type"] == "tool_use"), None
+                )
                 if not call:
                     return serialized_messages
 
@@ -537,6 +568,13 @@ class AnthropicInferenceClient(InferenceClient):
                     result = await tool_funcs[call["name"]](call["input"])
                 except StopAsyncIteration:
                     return serialized_messages
+
+                if len(serialized_messages) > 3:
+                    serialized_messages[-3]["content"][0].pop("cache_control", None)
+                    serialized_messages[-1]["content"][0]["cache_control"] = {
+                        "type": "ephemeral"
+                    }
+
                 serialized_messages.append(
                     {
                         "role": "user",
@@ -548,6 +586,18 @@ class AnthropicInferenceClient(InferenceClient):
                             }
                         ],
                     }
+                )
+
+                if keep_n_states:
+                    serialized_messages = [
+                        serialized_messages[0]
+                    ] + serialized_messages[1:][-keep_n_states:]
+
+                print(
+                    [
+                        msg["content"][0].get("cache_control", None)
+                        for msg in serialized_messages
+                    ]
                 )
 
         return serialized_messages
