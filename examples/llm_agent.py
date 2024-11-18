@@ -19,6 +19,7 @@ from asimov.graph import (
     FlowControlModule,
     FlowControlConfig,
     FlowDecision,
+    Cache,
 )
 from asimov.graph.tasks import Task
 from asimov.caches.redis_cache import RedisCache
