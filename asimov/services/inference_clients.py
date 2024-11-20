@@ -586,13 +586,6 @@ class AnthropicInferenceClient(InferenceClient):
                         "type": "ephemeral"
                     }
 
-                print(
-                    [
-                        msg["content"][0].get("cache_control", None)
-                        for msg in serialized_messages
-                    ]
-                )
-
                 if keep_n_states:
                     serialized_messages = [
                         serialized_messages[0]
