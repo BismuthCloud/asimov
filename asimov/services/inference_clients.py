@@ -486,12 +486,11 @@ class AnthropicInferenceClient(InferenceClient):
         if messages[0].role == ChatRole.SYSTEM:
             system = {
                 "system": [
-                    {"type": "text", "text": messages[0].content}
-                    | (
-                        {"cache_control": {"type": "ephemeral"}}
-                        if messages[0].cache_marker
-                        else {}
-                    )
+                    {
+                        "type": "text",
+                        "text": messages[0].content,
+                        "cache_control": {"type": "ephemeral"},
+                    }
                 ]
             }
             messages = messages[1:]
@@ -503,13 +502,6 @@ class AnthropicInferenceClient(InferenceClient):
             }
             for msg in messages
         ]
-        serialized_messages[-1]["content"][0] = serialized_messages[-1]["content"][
-            0
-        ] | (
-            {"cache_control": {"type": "ephemeral"}}
-            if messages[-1].cache_marker
-            else {}
-        )
 
         async with httpx.AsyncClient() as client:
             for _ in range(max_iterations):
@@ -551,6 +543,15 @@ class AnthropicInferenceClient(InferenceClient):
                 )
                 self._account_output_tokens(body["usage"]["output_tokens"])
 
+                print(
+                    "cache read tokens: ",
+                    body["usage"].get("cache_read_input_tokens", 0),
+                )
+                print(
+                    "cache create tokens: ",
+                    body["usage"].get("cache_creation_input_tokens", 0),
+                )
+
                 serialized_messages.append(
                     {
                         "role": "assistant",
@@ -569,12 +570,6 @@ class AnthropicInferenceClient(InferenceClient):
                 except StopAsyncIteration:
                     return serialized_messages
 
-                if len(serialized_messages) > 3:
-                    serialized_messages[-3]["content"][0].pop("cache_control", None)
-                    serialized_messages[-1]["content"][0]["cache_control"] = {
-                        "type": "ephemeral"
-                    }
-
                 serialized_messages.append(
                     {
                         "role": "user",
@@ -586,6 +581,19 @@ class AnthropicInferenceClient(InferenceClient):
                             }
                         ],
                     }
+                )
+
+                if len(serialized_messages) > 5:
+                    serialized_messages[-5]["content"][0].pop("cache_control", None)
+                    serialized_messages[-1]["content"][0]["cache_control"] = {
+                        "type": "ephemeral"
+                    }
+
+                print(
+                    [
+                        msg["content"][0].get("cache_control", None)
+                        for msg in serialized_messages
+                    ]
                 )
 
                 if keep_n_states:
