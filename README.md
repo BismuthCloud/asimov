@@ -3,7 +3,7 @@
 
 # Asimov
 
-Asimov is a powerful graph-based inference and caching system with Redis support. It provides a flexible framework for building and executing inference workflows while efficiently managing data through Redis caching.
+Asimov is a powerful graph-based inference and caching system with Redis support. It provides a flexible framework for building and executing agentic workflows while efficiently managing data through various data caching mechanisms.
 
 ## Features
 
