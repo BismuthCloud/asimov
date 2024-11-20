@@ -518,20 +518,26 @@ class AnthropicInferenceClient(InferenceClient):
                 if system:
                     request.update(system)
 
-                response = await client.post(
-                    self.api_url,
-                    timeout=300000,
-                    json=request,
-                    headers={
-                        "x-api-key": self.api_key,
-                        "anthropic-version": "2023-06-01",
-                        "anthropic-beta": "prompt-caching-2024-07-31",
-                    },
-                )
+                for retry in range(5):
+                    response = await client.post(
+                        self.api_url,
+                        timeout=300000,
+                        json=request,
+                        headers={
+                            "x-api-key": self.api_key,
+                            "anthropic-version": "2023-06-01",
+                            "anthropic-beta": "prompt-caching-2024-07-31",
+                        },
+                    )
 
-                if response.status_code != 200:
-                    print(await response.aread())
-                    response.raise_for_status()
+                    if response.status_code == 429:
+                        print("429 backoff")
+                        await asyncio.sleep(3**retry)
+                        continue
+
+                    break
+
+                response.raise_for_status()
 
                 body: dict = response.json()
 
@@ -542,15 +548,6 @@ class AnthropicInferenceClient(InferenceClient):
                     + body["usage"].get("cache_creation_input_tokens", 0),
                 )
                 self._account_output_tokens(body["usage"]["output_tokens"])
-
-                print(
-                    "cache read tokens: ",
-                    body["usage"].get("cache_read_input_tokens", 0),
-                )
-                print(
-                    "cache create tokens: ",
-                    body["usage"].get("cache_creation_input_tokens", 0),
-                )
 
                 serialized_messages.append(
                     {
@@ -600,6 +597,9 @@ class AnthropicInferenceClient(InferenceClient):
                     serialized_messages = [
                         serialized_messages[0]
                     ] + serialized_messages[1:][-keep_n_states:]
+
+                # Artificially slow things down just a bit because perf with caching makes it easy to hit TPM limits
+                await asyncio.sleep(2)
 
         return serialized_messages
 
