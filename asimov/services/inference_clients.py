@@ -9,6 +9,7 @@ import aioboto3
 import httpx
 import opentelemetry.instrumentation.httpx
 import opentelemetry.trace
+import pydantic_core
 import vertexai.generative_models
 import google.api_core.exceptions
 
@@ -511,53 +512,146 @@ class AnthropicInferenceClient(InferenceClient):
                     "temperature": temperature,
                     "max_tokens": max_tokens,
                     "messages": serialized_messages,
-                    "stream": False,
+                    "stream": True,
                     "tools": [x[1] for x in tools],
                     "tool_choice": {"type": tool_choice},
                 }
                 if system:
                     request.update(system)
 
+                current_content = []
+                current_block = {"type": None, "text": "", "tool_use": None}
+                current_json = ""
+
                 for retry in range(5):
-                    response = await client.post(
-                        self.api_url,
-                        timeout=300000,
-                        json=request,
-                        headers={
-                            "x-api-key": self.api_key,
-                            "anthropic-version": "2023-06-01",
-                            "anthropic-beta": "prompt-caching-2024-07-31",
-                        },
-                    )
+                    try:
+                        async with client.stream(
+                            "POST",
+                            self.api_url,
+                            timeout=300000,
+                            json=request,
+                            headers={
+                                "x-api-key": self.api_key,
+                                "anthropic-version": "2023-06-01",
+                                "anthropic-beta": "prompt-caching-2024-07-31",
+                            },
+                        ) as response:
+                            async for line in response.aiter_lines():
+                                if not line.startswith("data: "):
+                                    continue
 
-                    if response.status_code == 429:
-                        print("429 backoff")
-                        await asyncio.sleep(3**retry)
-                        continue
+                                chunk_json = json.loads(line[6:])
+                                chunk_type = chunk_json["type"]
 
-                    break
+                                if chunk_type == "message_start":
+                                    self._account_input_tokens(
+                                        chunk_json["message"]["usage"]["input_tokens"]
+                                        + chunk_json["message"]["usage"].get(
+                                            "cache_read_input_tokens", 0
+                                        )
+                                        + chunk_json["message"]["usage"].get(
+                                            "cache_creation_input_tokens", 0
+                                        )
+                                    )
+                                    opentelemetry.trace.get_current_span().set_attribute(
+                                        "inference.usage.cached_input_tokens",
+                                        chunk_json["message"]["usage"].get(
+                                            "cache_read_input_tokens", 0
+                                        ),
+                                    )
+                                elif chunk_type == "content_block_start":
+                                    if current_block["type"] is not None:
+                                        if current_block["type"] == "text":
+                                            current_content.append(
+                                                {
+                                                    "type": "text",
+                                                    "text": current_block["text"],
+                                                }
+                                            )
+                                        elif current_block["type"] == "tool_use":
+                                            current_content.append(
+                                                current_block["tool_use"]
+                                            )
 
-                response.raise_for_status()
-
-                body: dict = response.json()
-
-                self._account_input_tokens(
-                    # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#tracking-cache-performance
-                    body["usage"]["input_tokens"]
-                    + body["usage"].get("cache_read_input_tokens", 0)
-                    + body["usage"].get("cache_creation_input_tokens", 0),
-                )
-                self._account_output_tokens(body["usage"]["output_tokens"])
+                                    block_type = chunk_json["content_block"]["type"]
+                                    current_block = {
+                                        "type": block_type,
+                                        "text": "",
+                                        "tool_use": None,
+                                    }
+                                    if block_type == "tool_use":
+                                        current_block["tool_use"] = {
+                                            "type": "tool_use",
+                                            "id": chunk_json["content_block"]["id"],
+                                            "name": chunk_json["content_block"]["name"],
+                                            "input": {},
+                                        }
+                                        current_json = ""
+                                elif chunk_type == "content_block_delta":
+                                    if chunk_json["delta"]["type"] == "text_delta":
+                                        current_block["text"] += chunk_json["delta"][
+                                            "text"
+                                        ]
+                                    elif (
+                                        chunk_json["delta"]["type"]
+                                        == "input_json_delta"
+                                    ):
+                                        current_json += chunk_json["delta"][
+                                            "partial_json"
+                                        ]
+                                        current_block["tool_use"]["input"] = (
+                                            pydantic_core.from_json(
+                                                current_json, allow_partial=True
+                                            )
+                                        )
+                                elif chunk_type == "content_block_stop":
+                                    if current_block["type"] == "text":
+                                        current_content.append(
+                                            {
+                                                "type": "text",
+                                                "text": current_block["text"],
+                                            }
+                                        )
+                                    elif current_block["type"] == "tool_use":
+                                        current_content.append(
+                                            current_block["tool_use"]
+                                        )
+                                    current_block = {
+                                        "type": None,
+                                        "text": "",
+                                        "tool_use": None,
+                                    }
+                                elif chunk_type == "message_delta":
+                                    if (
+                                        chunk_json["delta"].get("stop_reason")
+                                        == "tool_use"
+                                    ):
+                                        self._account_output_tokens(
+                                            chunk_json["usage"]["output_tokens"]
+                                        )
+                                        break
+                        break  # Break retry loop on success
+                    except httpx.HTTPStatusError as e:
+                        if e.response.status_code == 429:
+                            print("429 backoff")
+                            await asyncio.sleep(3**retry)
+                            continue
+                        raise
+                    except (httpx.RequestError, httpx.HTTPError) as e:
+                        if retry < 4:  # Allow retrying on connection errors
+                            await asyncio.sleep(3**retry)
+                            continue
+                        raise
 
                 serialized_messages.append(
                     {
                         "role": "assistant",
-                        "content": body["content"],
+                        "content": current_content,
                     }
                 )
 
                 call = next(
-                    (c for c in body["content"] if c["type"] == "tool_use"), None
+                    (c for c in current_content if c["type"] == "tool_use"), None
                 )
                 if not call:
                     return serialized_messages
