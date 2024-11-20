@@ -87,9 +87,6 @@ result = await module.run(cache, semaphore)
 Available module types:
 - PLANNER: For modules that plan or coordinate workflows
 - EXECUTOR: For modules that perform specific tasks
-- DISCRIMINATOR: For modules that make decisions
-- OBSERVER: For modules that monitor or log
-- SUBGRAPH: For composite modules containing other modules
 - FLOW_CONTROL: For modules that control workflow execution
 
 ### Inference Clients
