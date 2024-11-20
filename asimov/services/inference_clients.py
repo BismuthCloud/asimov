@@ -599,11 +599,14 @@ class AnthropicInferenceClient(InferenceClient):
                                         current_json += chunk_json["delta"][
                                             "partial_json"
                                         ]
-                                        current_block["tool_use"]["input"] = (
-                                            pydantic_core.from_json(
-                                                current_json, allow_partial=True
+                                        try:
+                                            current_block["tool_use"]["input"] = (
+                                                pydantic_core.from_json(
+                                                    current_json, allow_partial=True
+                                                )
                                             )
-                                        )
+                                        except ValueError:
+                                            pass
                                 elif chunk_type == "content_block_stop":
                                     if current_block["type"] == "text":
                                         current_content.append(
