@@ -4,7 +4,7 @@ This walkthrough will guide you through creating an agent that uses Large Langua
 
 ## Prerequisites
 
-- Python 3.7+
+- Python 3.12+
 - Redis server running
 - Asimov Agents package installed
 - API key for an LLM provider (e.g., Anthropic, AWS Bedrock)
