@@ -18,7 +18,7 @@ from asimov.caches.mock_redis_cache import MockRedisCache
 from examples.llm_agent import (
     LLMPlannerModule,
     LLMExecutorModule,
-    LLMDiscriminatorModule
+    LLMFlowControlModule
 )
 
 class MockAnthropicResponse:
@@ -63,8 +63,8 @@ def llm_agent(mock_cache, mock_anthropic_client):
     executor = LLMExecutorModule()
     executor.client = mock_anthropic_client
     
-    discriminator = LLMDiscriminatorModule()
-    discriminator.client = mock_anthropic_client
+    flow_control_module = LLMFlowControlModule()
+    flow_control_module.client = mock_anthropic_client
     
     # Create agent
     agent = Agent(
@@ -76,7 +76,7 @@ def llm_agent(mock_cache, mock_anthropic_client):
     # Create nodes
     planner_node = Node(
         name="planner",
-        type=ModuleType.PLANNER,
+        type=ModuleType.EXECUTOR,
         modules=[planner],
         node_config=NodeConfig(
             parallel=False,
@@ -88,13 +88,13 @@ def llm_agent(mock_cache, mock_anthropic_client):
         name="executor",
         type=ModuleType.EXECUTOR,
         modules=[executor],
-        dependencies=["planner", "discriminator"]
+        dependencies=["planner", "flow_control_llm"]
     )
     
-    discriminator_node = Node(
-        name="discriminator",
-        type=ModuleType.DISCRIMINATOR,
-        modules=[discriminator],
+    flow_control_node = Node(
+        name="flow_control_llm",
+        type=ModuleType.FLOW_CONTROL,
+        modules=[flow_control_module],
         dependencies=["executor"]
     )
     
@@ -111,7 +111,7 @@ def llm_agent(mock_cache, mock_anthropic_client):
                         condition="plan != null and current_step < len(plan)"
                     ),
                     FlowDecision(
-                        next_node="discriminator",
+                        next_node="flow_control_llm",
                         condition="execution_history != null"
                     )
                 ],
@@ -121,7 +121,7 @@ def llm_agent(mock_cache, mock_anthropic_client):
     )
     
     # Add nodes to agent
-    agent.add_multiple_nodes([planner_node, executor_node, discriminator_node, flow_control])
+    agent.add_multiple_nodes([planner_node, executor_node, flow_control_node, flow_control])
     return agent
 
 @pytest.mark.asyncio
@@ -130,13 +130,13 @@ async def test_llm_agent_initialization(llm_agent):
     assert len(llm_agent.nodes) == 4
     assert "planner" in llm_agent.nodes
     assert "executor" in llm_agent.nodes
-    assert "discriminator" in llm_agent.nodes
+    assert "flow_control_llm" in llm_agent.nodes
     assert "flow_control" in llm_agent.nodes
     
     # Verify node types
-    assert llm_agent.nodes["planner"].type == ModuleType.PLANNER
+    assert llm_agent.nodes["planner"].type == ModuleType.EXECUTOR
     assert llm_agent.nodes["executor"].type == ModuleType.EXECUTOR
-    assert llm_agent.nodes["discriminator"].type == ModuleType.DISCRIMINATOR
+    assert llm_agent.nodes["flow_control_llm"].type == ModuleType.FLOW_CONTROL
     assert llm_agent.nodes["flow_control"].type == ModuleType.FLOW_CONTROL
 
 @pytest.mark.asyncio

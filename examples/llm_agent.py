@@ -30,7 +30,7 @@ class LLMPlannerModule(AgentModule):
     """Uses LLM to plan task execution."""
     
     name: str = "llm_planner"
-    type: ModuleType = ModuleType.PLANNER
+    type: ModuleType = ModuleType.EXECUTOR
 
     client: AnthropicInferenceClient = None
 
@@ -145,11 +145,11 @@ class LLMExecutorModule(AgentModule):
         }
 
 
-class LLMDiscriminatorModule(AgentModule):
+class LLMFlowControlModule(AgentModule):
     """Makes decisions about execution flow based on LLM analysis."""
     
-    name: str = "llm_discriminator"
-    type: ModuleType = ModuleType.DISCRIMINATOR
+    name: str = "llm_flow_control"
+    type: ModuleType = ModuleType.FLOW_CONTROL
 
     client: AnthropicInferenceClient = None
 

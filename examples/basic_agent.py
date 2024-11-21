@@ -29,7 +29,7 @@ class TextPlannerModule(AgentModule):
     """Plans text processing operations."""
     
     name: str = "text_planner"
-    type: ModuleType = ModuleType.PLANNER
+    type: ModuleType = ModuleType.EXECUTOR
 
     async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
         # Get the task from cache
@@ -100,7 +100,7 @@ async def main():
     # Create nodes
     planner_node = Node(
         name="planner",
-        type=ModuleType.PLANNER,
+        type=ModuleType.EXECUTOR,
         modules=[TextPlannerModule()],
         node_config=NodeConfig(
             parallel=False,

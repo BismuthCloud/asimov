@@ -50,9 +50,6 @@ Asimov Agents is composed of three main components:
 - **Module Types**
   - `PLANNER`: Strategic task planning modules
   - `EXECUTOR`: Task execution modules
-  - `DISCRIMINATOR`: Decision making modules
-  - `OBSERVER`: Monitoring and logging modules
-  - `SUBGRAPH`: Nested graph structure modules
   - `FLOW_CONTROL`: Execution flow control modules
 
 - **Node Configuration**
@@ -118,9 +115,6 @@ The Asimov Agents framework is built around several core primitives that enable 
 The framework supports different types of modules through the `ModuleType` enum:
 - `PLANNER`: Strategic task planning and decomposition
 - `EXECUTOR`: Task execution and action implementation
-- `DISCRIMINATOR`: Decision making and filtering
-- `OBSERVER`: Monitoring and logging functionality
-- `SUBGRAPH`: Nested graph structures for hierarchical agents
 - `FLOW_CONTROL`: Execution flow and routing control
 
 ### Agent Module
@@ -359,4 +353,4 @@ pytest tests/
 
 ## License
 
-[Add your license information here]
+ApacheV2

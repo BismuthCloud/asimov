@@ -29,7 +29,7 @@ class TaskSplitterModule(AgentModule):
     """Splits a large task into smaller subtasks for parallel processing."""
     
     name: str = "task_splitter"
-    type: ModuleType = ModuleType.PLANNER
+    type: ModuleType = ModuleType.EXECUTOR
 
     async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
         task = await cache.get("task")
@@ -152,7 +152,7 @@ async def main():
     # Create nodes
     splitter_node = Node(
         name="splitter",
-        type=ModuleType.PLANNER,
+        type=ModuleType.EXECUTOR,
         modules=[TaskSplitterModule()],
         node_config=NodeConfig(
             parallel=False,
