@@ -7,6 +7,12 @@ A Python framework for building AI agent systems with robust task management, in
 
 🔮 Asimov is the foundation of [bismuth.sh](https://waitlist.bismuth.sh) an in terminal coding agent that can handle many tasks autonomously. Check us out! 🔮
 
+## Quickstart
+
+Checkout [these docs](https://github.com/BismuthCloud/asimov/tree/main/docs) which show off two basic examples that should be enough to get your experimenting!
+
+Further documentation greatly appreciated in PRs!
+
 ## System Overview
 
 Asimov Agents is composed of three main components:
@@ -52,7 +58,7 @@ Asimov Agents is composed of three main components:
 
 ### Graph System Architecture
 - **Module Types**
-  - `PLANNER`: Strategic task planning modules
+  - `SUBGRAPH`: Nodes composes of other nodes.
   - `EXECUTOR`: Task execution modules
   - `FLOW_CONTROL`: Execution flow control modules
 
@@ -117,7 +123,7 @@ The Asimov Agents framework is built around several core primitives that enable 
 
 ### Module Types
 The framework supports different types of modules through the `ModuleType` enum:
-- `PLANNER`: Strategic task planning and decomposition
+- `SUBGRAPH`: Nodes composes of other nodes.
 - `EXECUTOR`: Task execution and action implementation
 - `FLOW_CONTROL`: Execution flow and routing control
 
@@ -224,16 +230,6 @@ task = Task(
 )
 
 # Create nodes with different module types
-planner_node = Node(
-    name="planner",
-    type=ModuleType.PLANNER,
-    modules=[PlannerModule()],
-    node_config=NodeConfig(
-        parallel=False,
-        max_retries=3
-    )
-)
-
 executor_node = Node(
     name="executor",
     type=ModuleType.EXECUTOR,
@@ -249,7 +245,7 @@ flow_control = Node(
             decisions=[
                 FlowDecision(
                     next_node="executor",
-                    condition="task.ready == true"
+                    condition="task.ready == true" # Conditions are small lua scripts that get run based on current state.
                 )
             ],
             default="planner"
@@ -265,7 +261,7 @@ agent = Agent(
 )
 
 # Add nodes to the agent
-agent.add_multiple_nodes([planner_node, executor_node, flow_control])
+agent.add_multiple_nodes([executor_node, flow_control])
 
 # Run the task
 await agent.run_task(task)
