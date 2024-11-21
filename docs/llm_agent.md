@@ -234,88 +234,113 @@ Key points:
 - Maintains progress through steps
 - Includes detailed results and validation
 
-### 4. Adding a Flow Control Module
+### 4. Flow Control Options
 
-The flow control module makes decisions about execution flow:
+The framework provides two types of flow control modules:
+
+1. Basic Flow Control Module
+2. Agent-Directed Flow Control Module
+
+#### Basic Flow Control Module
+
+The basic flow control module uses Lua conditions to make routing decisions:
 
 ```python
-class LLMFlowControlModule(AgentModule):
-    """Makes decisions about execution flow based on LLM analysis."""
-
-    name: str = "llm_flow_control"
-    type: ModuleType = ModuleType.FLOW_CONTROL
-
-    client: AnthropicInferenceClient = None
-
-    def __init__(self):
-        super().__init__()
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY environment variable must be set")
-        self.client = AnthropicInferenceClient(
-            model="claude-3-5-sonnet-20241022", api_key=api_key
+flow_control = Node(
+    name="flow_control",
+    type=ModuleType.FLOW_CONTROL,
+    modules=[FlowControlModule(
+        flow_config=FlowControlConfig(
+            decisions=[
+                FlowDecision(
+                    next_node="executor",
+                    condition="plan ~= nil and current_step < #plan" # Lua conditions
+                ),
+                FlowDecision(
+                    next_node="flow_control",
+                    condition="execution_history ~= nil" 
+                )
+            ],
+            default="planner"
         )
-
-    async def process(
-        self, cache: Cache, semaphore: asyncio.Semaphore
-    ) -> Dict[str, Any]:
-        print(f"{self.name}: Starting flow control process")
-        plan = await cache.get("plan")
-        current_step = await cache.get("current_step")
-        execution_history = await cache.get("execution_history", [])
-        print(
-            f"{self.name}: Retrieved plan and history with {len(execution_history)} entries"
-        )
-
-        if not execution_history:
-            return {
-                "status": "success",
-                "result": {"decision": "continue", "reason": "No history to analyze"},
-            }
-
-        # Create analysis prompt
-        prompt = f"""
-        Execution History: {execution_history}
-        Current Step: {current_step} of {len(plan)} steps
-
-        Analyze the execution history and determine if we should:
-        1. continue: proceed with the next step
-        2. retry: retry the current step
-        3. replan: create a new plan
-        4. abort: stop execution
-
-        Provide your decision and reasoning.
-        """
-
-        try:
-            print(f"{self.name}: Sending analysis request to LLM")
-            response = await asyncio.wait_for(
-                self.client.complete(prompt), timeout=30.0
-            )
-            analysis = response.choices[0].message.content
-            print(f"{self.name}: Received analysis result from LLM")
-        except asyncio.TimeoutError:
-            print(f"{self.name}: Timeout waiting for LLM analysis response")
-            raise
-
-        return {
-            "status": "success",
-            "result": {
-                "analysis": analysis,
-                "decision": "continue",  # Extract actual decision from analysis
-            },
-        }
+    )]
+)
 ```
 
 Key points:
-- Uses LLM for decision making
-- Analyzes execution history
-- Provides reasoning with decisions
-- Supports multiple decision types
+- Uses Lua conditions for decision making
+- Supports multiple decision paths
+- Can access cache variables in conditions
+- Has a default fallback path
+
+#### Agent-Directed Flow Control Module
+
+The agent-directed flow control module uses LLMs to make intelligent routing decisions:
+
+```python
+from asimov.graph.agent_directed_flow import (
+    AgentDirectedFlowControl,
+    AgentDrivenFlowControlConfig,
+    AgentDrivenFlowDecision,
+    Example
+)
+
+flow_control = Node(
+    name="flow_control",
+    type=ModuleType.FLOW_CONTROL,
+    modules=[AgentDirectedFlowControl(
+        inference_client=AnthropicInferenceClient(...),
+        system_description="A system that handles various content creation tasks",
+        flow_config=AgentDrivenFlowControlConfig(
+            decisions=[
+                AgentDrivenFlowDecision(
+                    next_node="blog_writer",
+                    metadata={"description": "Writes blog posts on technical topics"},
+                    examples=[
+                        Example(
+                            message="Write a blog post about AI agents",
+                            choices=[
+                                {"choice": "blog_writer", "description": "Writes blog posts"},
+                                {"choice": "code_writer", "description": "Writes code"}
+                            ],
+                            choice="blog_writer",
+                            reasoning="The request is specifically for blog content"
+                        )
+                    ]
+                ),
+                AgentDrivenFlowDecision(
+                    next_node="code_writer",
+                    metadata={"description": "Writes code examples and tutorials"},
+                    examples=[
+                        Example(
+                            message="Create a Python script for data processing",
+                            choices=[
+                                {"choice": "blog_writer", "description": "Writes blog posts"},
+                                {"choice": "code_writer", "description": "Writes code"}
+                            ],
+                            choice="code_writer",
+                            reasoning="The request is for code creation"
+                        )
+                    ]
+                )
+            ],
+            default="error_handler"
+        )
+    )]
+)
+```
+
+Key points:
+- Uses LLM for intelligent decision making
+- Supports example-based learning
+- Can include reasoning for decisions
+- Maintains context awareness
+- Handles complex routing scenarios
+- Supports metadata for rich decision context
 
 ### 5. Configuring Flow Control
 
-Set up flow control with LLM-aware conditions:
+Choose the appropriate flow control based on your needs:
 
 ```python
 flow_control = Node(
@@ -339,9 +364,11 @@ flow_control = Node(
 )
 ```
 
-### 6. Putting It All Together
+### 6. Example Implementations
 
-Create and run the agent:
+#### Basic Task Planning Agent
+
+Create a basic agent that uses LLM for task planning and execution:
 
 ```python
 async def main():
@@ -381,8 +408,7 @@ async def main():
     agent.add_multiple_nodes([
         planner_node,
         executor_node,
-        flow_control_node,
-        flow_control
+        flow_control_node
     ])
     
     # Create and run a task
@@ -402,8 +428,111 @@ async def main():
         }
     )
     
-    # Run the task
     await agent.run_task(task)
+```
+
+#### Intelligent Content Router
+
+Create an agent that uses AgentDirectedFlow to route content creation tasks:
+
+```python
+async def main():
+    # Create the agent
+    agent = Agent(
+        cache=RedisCache(default_prefix=str(uuid4())),
+        max_concurrent_tasks=1,
+        max_total_iterations=20
+    )
+    
+    # Set up specialized content nodes
+    blog_writer = Node(
+        name="blog_writer",
+        type=ModuleType.EXECUTOR,
+        modules=[BlogWriterModule()]
+    )
+    
+    code_writer = Node(
+        name="code_writer",
+        type=ModuleType.EXECUTOR,
+        modules=[CodeWriterModule()]
+    )
+    
+    error_handler = Node(
+        name="error_handler",
+        type=ModuleType.EXECUTOR,
+        modules=[ErrorHandlerModule()]
+    )
+    
+    # Create flow control with agent-directed decisions
+    flow_control = Node(
+        name="flow_control",
+        type=ModuleType.FLOW_CONTROL,
+        modules=[AgentDirectedFlowControl(
+            inference_client=AnthropicInferenceClient(...),
+            system_description="A system that handles various content creation tasks",
+            flow_config=AgentDrivenFlowControlConfig(
+                decisions=[
+                    AgentDrivenFlowDecision(
+                        next_node="blog_writer",
+                        metadata={"description": "Writes blog posts"},
+                        examples=[
+                            Example(
+                                message="Write a blog post about AI",
+                                choices=[
+                                    {"choice": "blog_writer", "description": "Writes blogs"},
+                                    {"choice": "code_writer", "description": "Writes code"}
+                                ],
+                                choice="blog_writer",
+                                reasoning="Request is for blog content"
+                            )
+                        ]
+                    ),
+                    AgentDrivenFlowDecision(
+                        next_node="code_writer",
+                        metadata={"description": "Writes code"},
+                        examples=[
+                            Example(
+                                message="Create a sorting algorithm",
+                                choices=[
+                                    {"choice": "blog_writer", "description": "Writes blogs"},
+                                    {"choice": "code_writer", "description": "Writes code"}
+                                ],
+                                choice="code_writer",
+                                reasoning="Request is for code implementation"
+                            )
+                        ]
+                    )
+                ],
+                default="error_handler"
+            )
+        )]
+    )
+    
+    # Add all nodes to agent
+    agent.add_multiple_nodes([
+        blog_writer,
+        code_writer,
+        error_handler,
+        flow_control
+    ])
+    
+    # Example tasks
+    tasks = [
+        Task(
+            type="content_request",
+            objective="Write about AI",
+            params={"input_message": "Write a blog post about AI"}
+        ),
+        Task(
+            type="content_request",
+            objective="Implement quicksort",
+            params={"input_message": "Create a quicksort implementation"}
+        )
+    ]
+    
+    # Run tasks
+    for task in tasks:
+        await agent.run_task(task)
 
 if __name__ == "__main__":
     asyncio.run(main())
