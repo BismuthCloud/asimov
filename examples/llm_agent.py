@@ -80,7 +80,11 @@ class LLMPlannerModule(AgentModule):
                 timeout=30.0,
             )
 
-            response_content = json.loads(response)["steps"]
+            try:
+                loaded_response = json.loads(response)
+                response_content = loaded_response["steps"]
+            except json.JSONDecodeError as e:
+                return {"status": "error", "result": str(e)}
 
             print(f"{self.name}: Received plan from LLM")
         except asyncio.TimeoutError:

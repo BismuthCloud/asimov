@@ -535,6 +535,8 @@ class Agent(AsimovBase):
                 for (i, _), result in zip(tasks, results):
                     node_name = parallel_group["nodes"][i]
 
+                    self.node_results[node_name] = result
+
                     if not self.is_success(result):
                         dependent_chain = self.get_dependent_chains(node_name)
                         failed_chains.add(dependent_chain)
@@ -548,8 +550,6 @@ class Agent(AsimovBase):
                             },
                         )
                         continue
-
-                    self.node_results[node_name] = result
 
                     self.execution_state.mark_executed(
                         self.execution_state.execution_index, i

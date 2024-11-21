@@ -266,7 +266,7 @@ async def test_error_handling(simple_agent, mock_cache):
     assert "NodeB" in result["failed_chains"][0]
     assert "Executed A" in str(result["result"]["NodeA"])
     assert "Executed C" in str(result["result"]["NodeC"])
-    assert "NodeB" not in result["result"]
+    assert "NodeB" in result["result"]
     assert "NodeD" not in result["result"]
     assert error["status"] == "error" and "NodeB" in error["node"]
 
@@ -744,7 +744,7 @@ async def test_caching_results(simple_agent, mock_cache):
     result = await mock_cache.get_message(simple_agent.output_mailbox)
     assert "NodeA" in result["result"]
     assert "NodeB" in result["result"]
-    assert "NodeC" not in result["result"]
+    assert "NodeC" in result["result"]
 
 
 @pytest.mark.asyncio

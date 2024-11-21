@@ -20,26 +20,21 @@ from asimov.caches.mock_redis_cache import MockRedisCache
 from examples.llm_agent import LLMPlannerModule, LLMExecutorModule, LLMFlowControlModule
 
 
-class MockAnthropicResponse:
-    def __init__(self, content):
-        self.choices = [MagicMock(message=MagicMock(content=content))]
-
-
 class MockAnthropicClient:
     """Mock client for testing LLM interactions."""
 
     def __init__(self, responses=None):
         self.responses = responses or {}
-        self.default_response = MockAnthropicResponse("Default mock response")
+        self.default_response = {}
 
-    async def get_generation(self, messages: List[Any]) -> MockAnthropicResponse:
+    async def get_generation(self, messages: List[Any]) -> str:
         # Extract prompt from messages
         prompt = messages[-1].content if messages else ""
         # Return predefined response if available, otherwise default
         for key, response in self.responses.items():
             if key.lower() in prompt.lower():
-                return MockAnthropicResponse(response)
-        return self.default_response
+                return response
+        return json.dumps(self.default_response)
 
 
 @pytest.fixture(autouse=True)
@@ -50,6 +45,7 @@ def setup_env():
     if "ANTHROPIC_API_KEY" in os.environ:
         del os.environ["ANTHROPIC_API_KEY"]
 
+
 @pytest.fixture
 def mock_cache():
     return MockRedisCache()
@@ -59,7 +55,7 @@ def mock_cache():
 def mock_anthropic_client():
     return MockAnthropicClient(
         {
-            "Create a step-by-step plan": '[{"description": "Research AI agents", "requirements": "Access to documentation", "validation": "Comprehensive notes available"}, {"description": "Write introduction", "requirements": "Research notes", "validation": "Clear introduction exists"}]',
+            "Create a step-by-step plan": '{"steps": [{"description": "Research AI agents", "requirements": "Access to documentation", "validation": "Comprehensive notes available"}, {"description": "Write introduction", "requirements": "Research notes", "validation": "Clear introduction exists"}]}',
             "Execute this step": "Step executed successfully with the following results:\n1. Actions: Researched AI agents\n2. Outcome: Comprehensive notes created\n3. Output: 5 pages of detailed notes",
             "Evaluate if the step": "success - all validation criteria met",
             "Analyze the execution history": "Analysis complete. Decision: continue - execution is proceeding as expected",
@@ -145,7 +141,7 @@ async def test_llm_planning(llm_agent, mock_cache):
     assert "Plan created successfully" in result["results"][0]["result"]
 
     # Verify plan was stored in cache
-    plan = json.loads(await mock_cache.get("plan"))
+    plan = await mock_cache.get("plan")
 
     print(plan)
     assert isinstance(plan, list)
@@ -194,7 +190,7 @@ async def test_llm_execution(llm_agent, mock_cache):
     execution_history = await mock_cache.get("execution_history")
     assert execution_history is not None
     assert len(execution_history) == 1  # Should have one entry after first execution
-    
+
     history_entry = execution_history[0]
     assert "step" in history_entry
     assert "execution_result" in history_entry
@@ -250,15 +246,22 @@ async def test_missing_api_key():
     """Test that modules properly handle missing API key."""
     if "ANTHROPIC_API_KEY" in os.environ:
         del os.environ["ANTHROPIC_API_KEY"]
-    
-    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY environment variable must be set"):
+
+    with pytest.raises(
+        ValueError, match="ANTHROPIC_API_KEY environment variable must be set"
+    ):
         LLMPlannerModule()
-    
-    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY environment variable must be set"):
+
+    with pytest.raises(
+        ValueError, match="ANTHROPIC_API_KEY environment variable must be set"
+    ):
         LLMExecutorModule()
-    
-    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY environment variable must be set"):
+
+    with pytest.raises(
+        ValueError, match="ANTHROPIC_API_KEY environment variable must be set"
+    ):
         LLMFlowControlModule()
+
 
 @pytest.mark.asyncio
 async def test_error_handling(llm_agent, mock_cache):
@@ -287,6 +290,8 @@ async def test_error_handling(llm_agent, mock_cache):
 
     # Verify error handling in results
     planner_result = llm_agent.node_results.get("planner", {})
+
+    print(llm_agent.node_results)
     assert planner_result.get("status") in ["success", "error"]
 
     # If planning succeeded despite invalid JSON, executor should handle the error
