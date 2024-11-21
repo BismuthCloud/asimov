@@ -48,44 +48,54 @@ The planning executor module uses an LLM to analyze tasks and create execution p
 ```python
 class LLMPlannerModule(AgentModule):
     """Uses LLM to plan task execution."""
-    
-    name = "llm_planner"
-    type = ModuleType.EXECUTOR
+
+    name: str = "llm_planner"
+    type: ModuleType = ModuleType.EXECUTOR
+
+    client: AnthropicInferenceClient = None
 
     def __init__(self):
         super().__init__()
         self.client = AnthropicInferenceClient(
-            model="claude-3",
-            api_key="your-api-key"  # Replace with your API key
+            model="claude-3", api_key="your-api-key"  # Replace with your API key
         )
 
-    async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
+    async def process(
+        self, cache: Cache, semaphore: asyncio.Semaphore
+    ) -> Dict[str, Any]:
+        print(f"{self.name}: Starting planning process")
+        print(await cache.keys())
         task = await cache.get("task")
-        
+        print(f"{self.name}: Retrieved task: {task.objective}")
+
         # Create a planning prompt
         prompt = f"""
         Task Objective: {task.objective}
         Parameters: {task.params}
-        
+
         Create a step-by-step plan to accomplish this task.
         Format the response as a JSON array of steps, where each step has:
         - description: what needs to be done
         - requirements: any input needed
         - validation: how to verify the step was successful
         """
-        
+
         # Get plan from LLM
-        response = await self.client.complete(prompt)
-        plan = response.choices[0].message.content
-        
+        try:
+            print(f"{self.name}: Sending planning request to LLM")
+            response = await asyncio.wait_for(
+                self.client.get_generation([ChatMessage(role=ChatRole.USER, content=prompt)]), timeout=30.0
+            )
+            print(f"{self.name}: Received plan from LLM")
+        except asyncio.TimeoutError:
+            print(f"{self.name}: Timeout waiting for LLM response")
+            raise
+
         # Store the plan
-        await cache.set("plan", plan)
+        await cache.set("plan", json.loads(response))
         await cache.set("current_step", 0)
-        
-        return {
-            "status": "success",
-            "result": "Plan created successfully"
-        }
+
+        return {"status": "success", "result": "Plan created successfully"}
 ```
 
 Key points:
@@ -185,54 +195,66 @@ The flow control module makes decisions about execution flow:
 ```python
 class LLMFlowControlModule(AgentModule):
     """Makes decisions about execution flow based on LLM analysis."""
-    
-    name = "llm_flow_control"
-    type = ModuleType.FLOW_CONTROL
+
+    name: str = "llm_flow_control"
+    type: ModuleType = ModuleType.FLOW_CONTROL
+
+    client: AnthropicInferenceClient = None
 
     def __init__(self):
         super().__init__()
         self.client = AnthropicInferenceClient(
-            model="claude-3",
-            api_key="your-api-key"
+            model="claude-3", api_key="your-api-key"  # Replace with your API key
         )
 
-    async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
+    async def process(
+        self, cache: Cache, semaphore: asyncio.Semaphore
+    ) -> Dict[str, Any]:
+        print(f"{self.name}: Starting flow control process")
         plan = await cache.get("plan")
         current_step = await cache.get("current_step")
         execution_history = await cache.get("execution_history", [])
-        
+        print(
+            f"{self.name}: Retrieved plan and history with {len(execution_history)} entries"
+        )
+
         if not execution_history:
             return {
                 "status": "success",
-                "result": {
-                    "decision": "continue",
-                    "reason": "No history to analyze"
-                }
+                "result": {"decision": "continue", "reason": "No history to analyze"},
             }
-        
+
         # Create analysis prompt
         prompt = f"""
         Execution History: {execution_history}
         Current Step: {current_step} of {len(plan)} steps
-        
+
         Analyze the execution history and determine if we should:
         1. continue: proceed with the next step
         2. retry: retry the current step
         3. replan: create a new plan
         4. abort: stop execution
-        
+
         Provide your decision and reasoning.
         """
-        
-        response = await self.client.complete(prompt)
-        analysis = response.choices[0].message.content
-        
+
+        try:
+            print(f"{self.name}: Sending analysis request to LLM")
+            response = await asyncio.wait_for(
+                self.client.complete(prompt), timeout=30.0
+            )
+            analysis = response.choices[0].message.content
+            print(f"{self.name}: Received analysis result from LLM")
+        except asyncio.TimeoutError:
+            print(f"{self.name}: Timeout waiting for LLM analysis response")
+            raise
+
         return {
             "status": "success",
             "result": {
                 "analysis": analysis,
-                "decision": "continue"  # Extract actual decision from analysis
-            }
+                "decision": "continue",  # Extract actual decision from analysis
+            },
         }
 ```
 

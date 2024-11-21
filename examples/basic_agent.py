@@ -27,7 +27,7 @@ from asimov.caches.redis_cache import RedisCache
 
 class TextPlannerModule(AgentModule):
     """Plans text processing operations."""
-    
+
     name: str = "text_planner"
     type: ModuleType = ModuleType.EXECUTOR
 
@@ -37,7 +37,7 @@ class TextPlannerModule(AgentModule):
         task = await cache.get("task")
         text = task.params.get("text", "")
         print(f"{self.name}: Retrieved task with text length {len(text)}")
-        
+
         # Create a simple plan
         plan = {
             "operations": [
@@ -45,10 +45,10 @@ class TextPlannerModule(AgentModule):
                 {"type": "calculate_stats", "text": text}
             ]
         }
-        
+
         # Store the plan in cache
         await cache.set("plan", plan)
-        
+
         return {
             "status": "success",
             "result": "Plan created successfully"
@@ -57,7 +57,7 @@ class TextPlannerModule(AgentModule):
 
 class TextExecutorModule(AgentModule):
     """Executes text processing operations."""
-    
+
     name: str = "text_executor"
     type: ModuleType = ModuleType.EXECUTOR
 
@@ -67,7 +67,7 @@ class TextExecutorModule(AgentModule):
         plan = await cache.get("plan")
         task = await cache.get("task")
         print(f"{self.name}: Retrieved plan with {len(plan['operations'])} operations")
-        
+
         results = []
         for operation in plan["operations"]:
             if operation["type"] == "count_words":
@@ -86,7 +86,7 @@ class TextExecutorModule(AgentModule):
                         "lines": line_count
                     }
                 })
-        
+
         return {
             "status": "success",
             "result": results
@@ -102,7 +102,7 @@ async def main():
         max_total_iterations=10
     )
     print("Agent created with Redis cache")
-    
+
     # Create nodes
     planner_node = Node(
         name="planner",
@@ -113,33 +113,35 @@ async def main():
             max_retries=3
         )
     )
-    
+
     executor_node = Node(
         name="executor",
         type=ModuleType.EXECUTOR,
         modules=[TextExecutorModule()],
         dependencies=["planner"]
     )
-    
+
     flow_control = Node(
         name="flow_control",
         type=ModuleType.FLOW_CONTROL,
         modules=[FlowControlModule(
+            name="flow_control_module",
+            type=ModuleType.FLOW_CONTROL,
             flow_config=FlowControlConfig(
                 decisions=[
                     FlowDecision(
                         next_node="executor",
-                        condition="plan != null"
+                        condition="plan ~= null"
                     )
                 ],
                 default="planner"
             )
         )]
     )
-    
+
     # Add nodes to agent
     agent.add_multiple_nodes([planner_node, executor_node, flow_control])
-    
+
     # Create and run a task
     task = Task(
         type="text_processing",
@@ -148,12 +150,12 @@ async def main():
             "text": "Hello world!\nThis is a sample text.\nIt demonstrates the basic agent functionality."
         }
     )
-    
+
     # Run the task
     await agent.run_task(task)
-    
+
     # Get the final results
-    results = agent.node_results.get("executor", {}).get("result", [])
+    results = agent.node_results.get("executor", {}).get("results", [])[0]['result']
     print("\nProcessing Results:")
     for result in results:
         print(f"\nOperation: {result['operation']}")

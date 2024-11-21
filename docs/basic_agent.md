@@ -183,6 +183,22 @@ async def main():
         modules=[TextExecutorModule()],
         dependencies=["planner"]
     )
+
+    flow_control = Node(
+        name="flow_control",
+        type=ModuleType.FLOW_CONTROL,
+        modules=[FlowControlModule(
+            flow_config=FlowControlConfig(
+                decisions=[
+                    FlowDecision(
+                        next_node="executor",
+                        condition="plan ~= null" # Conditions are lua.
+                    )
+                ],
+                default="planner"
+            )
+        )]
+    )
     
     # Add nodes to agent
     agent.add_multiple_nodes([planner_node, executor_node, flow_control])

@@ -10,7 +10,7 @@ for task planning and execution. The agent will:
 
 import json
 import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any
 from asimov.graph import (
     Agent,
     AgentModule,
@@ -24,7 +24,7 @@ from asimov.graph import (
 )
 from asimov.graph.tasks import Task
 from asimov.caches.redis_cache import RedisCache
-from asimov.services.inference_clients import AnthropicInferenceClient
+from asimov.services.inference_clients import AnthropicInferenceClient, ChatMessage, ChatRole
 
 
 class LLMPlannerModule(AgentModule):
@@ -45,19 +45,14 @@ class LLMPlannerModule(AgentModule):
         self, cache: Cache, semaphore: asyncio.Semaphore
     ) -> Dict[str, Any]:
         print(f"{self.name}: Starting planning process")
-        try:
-            print(await cache.keys())
-            task = await asyncio.wait_for(cache.get("task"), timeout=5.0)
-            print(f"{self.name}: Retrieved task: {task.objective}")
-        except asyncio.TimeoutError:
-            print(f"{self.name}: Timeout retrieving task")
-            raise
+        task = await cache.get("task")
+        print(f"{self.name}: Retrieved task: {task.objective}")
 
         # Create a planning prompt
         prompt = f"""
         Task Objective: {task.objective}
         Parameters: {task.params}
-        
+
         Create a step-by-step plan to accomplish this task.
         Format the response as a JSON array of steps, where each step has:
         - description: what needs to be done
@@ -69,16 +64,15 @@ class LLMPlannerModule(AgentModule):
         try:
             print(f"{self.name}: Sending planning request to LLM")
             response = await asyncio.wait_for(
-                self.client.complete(prompt), timeout=30.0
+                self.client.get_generation([ChatMessage(role=ChatRole.USER, content=prompt)]), timeout=30.0
             )
-            plan = response.choices[0].message.content
             print(f"{self.name}: Received plan from LLM")
         except asyncio.TimeoutError:
             print(f"{self.name}: Timeout waiting for LLM response")
             raise
 
         # Store the plan
-        await cache.set("plan", plan)
+        await cache.set("plan", json.loads(response))
         await cache.set("current_step", 0)
 
         return {"status": "success", "result": "Plan created successfully"}
@@ -104,11 +98,9 @@ class LLMExecutorModule(AgentModule):
         print(f"{self.name}: Starting execution process")
         try:
             # Note the real cache uses jsonpickle and handles serialization and deserialization so you don't need to do this.
-            plan = json.loads(await asyncio.wait_for(cache.get("plan"), timeout=5.0))
-            current_step = await asyncio.wait_for(
-                cache.get("current_step"), timeout=5.0
-            )
-            task = await asyncio.wait_for(cache.get("task"), timeout=5.0)
+            plan = json.loads(await cache.get("plan"))
+            current_step = await cache.get("current_step")
+            task = await cache.get("task")
             print(f"{self.name}: Retrieved plan and current step {current_step}")
         except asyncio.TimeoutError:
             print(f"{self.name}: Timeout retrieving task data")
@@ -126,7 +118,7 @@ class LLMExecutorModule(AgentModule):
         Task: {task.objective}
         Current Step: {step['description']}
         Requirements: {step['requirements']}
-        
+
         Execute this step and provide the results.
         Include:
         1. The actions taken
@@ -137,10 +129,9 @@ class LLMExecutorModule(AgentModule):
         # Execute step with LLM
         try:
             print(f"{self.name}: Sending execution request to LLM")
-            response = await asyncio.wait_for(
-                self.client.complete(prompt), timeout=30.0
+            result = await asyncio.wait_for(
+                self.client.get_generation([ChatMessage(role=ChatRole.USER, content=prompt)]), timeout=30.0
             )
-            result = response.choices[0].message.content
             print(f"{self.name}: Received execution result from LLM")
         except asyncio.TimeoutError:
             print(f"{self.name}: Timeout waiting for LLM execution response")
@@ -151,17 +142,16 @@ class LLMExecutorModule(AgentModule):
         Step: {step['description']}
         Validation Criteria: {step['validation']}
         Result: {result}
-        
+
         Evaluate if the step was completed successfully.
         Return either "success" or "failure" with a brief explanation.
         """
 
         try:
             print(f"{self.name}: Sending validation request to LLM")
-            validation = await asyncio.wait_for(
-                self.client.complete(validation_prompt), timeout=30.0
+            validation_result = await asyncio.wait_for(
+                self.client.get_generation([ChatMessage(role=ChatRole.USER, content=validation_prompt)]), timeout=30.0
             )
-            validation_result = validation.choices[0].message.content
             print(f"{self.name}: Received validation result from LLM")
         except asyncio.TimeoutError:
             print(f"{self.name}: Timeout waiting for LLM validation response")
@@ -202,20 +192,12 @@ class LLMFlowControlModule(AgentModule):
         self, cache: Cache, semaphore: asyncio.Semaphore
     ) -> Dict[str, Any]:
         print(f"{self.name}: Starting flow control process")
-        try:
-            plan = await asyncio.wait_for(cache.get("plan"), timeout=5.0)
-            current_step = await asyncio.wait_for(
-                cache.get("current_step"), timeout=5.0
-            )
-            execution_history = await asyncio.wait_for(
-                cache.get("execution_history", []), timeout=5.0
-            )
-            print(
-                f"{self.name}: Retrieved plan and history with {len(execution_history)} entries"
-            )
-        except asyncio.TimeoutError:
-            print(f"{self.name}: Timeout retrieving flow control data")
-            raise
+        plan = await cache.get("plan")
+        current_step = await cache.get("current_step")
+        execution_history = await cache.get("execution_history", [])
+        print(
+            f"{self.name}: Retrieved plan and history with {len(execution_history)} entries"
+        )
 
         if not execution_history:
             return {
@@ -227,13 +209,13 @@ class LLMFlowControlModule(AgentModule):
         prompt = f"""
         Execution History: {execution_history}
         Current Step: {current_step} of {len(plan)} steps
-        
+
         Analyze the execution history and determine if we should:
         1. continue: proceed with the next step
         2. retry: retry the current step
         3. replan: create a new plan
         4. abort: stop execution
-        
+
         Provide your decision and reasoning.
         """
 
@@ -266,7 +248,7 @@ async def main():
     # Create nodes
     planner_node = Node(
         name="planner",
-        type=ModuleType.PLANNER,
+        type=ModuleType.EXECUTOR,
         modules=[LLMPlannerModule()],
         node_config=NodeConfig(parallel=False, max_retries=3),
     )
@@ -275,14 +257,7 @@ async def main():
         name="executor",
         type=ModuleType.EXECUTOR,
         modules=[LLMExecutorModule()],
-        dependencies=["planner", "discriminator"],
-    )
-
-    discriminator_node = Node(
-        name="discriminator",
-        type=ModuleType.DISCRIMINATOR,
-        modules=[LLMDiscriminatorModule()],
-        dependencies=["executor"],
+        dependencies=["planner"],
     )
 
     flow_control = Node(
@@ -296,11 +271,11 @@ async def main():
                     decisions=[
                         FlowDecision(
                             next_node="executor",
-                            condition="plan != null and current_step < len(plan)",
+                            condition="plan ~= nil and current_step < #plan",
                         ),
                         FlowDecision(
-                            next_node="discriminator",
-                            condition="execution_history != null",
+                            next_node="flow_control",
+                            condition="execution_history ~= nil",
                         ),
                     ],
                     default="planner",
@@ -311,7 +286,7 @@ async def main():
 
     # Add nodes to agent
     agent.add_multiple_nodes(
-        [planner_node, executor_node, discriminator_node, flow_control]
+        [planner_node, executor_node, flow_control]
     )
 
     # Create and run a task
