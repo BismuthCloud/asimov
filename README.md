@@ -5,6 +5,8 @@
 
 A Python framework for building AI agent systems with robust task management, inference capabilities, and caching.
 
+🔮 Asimov is the foundation of (bismuth.sh)[https://waitlist.bismuth.sh] an in terminal coding agent that can handle many tasks autonomously. Check us out! 🔮
+
 ## System Overview
 
 Asimov Agents is composed of three main components:
