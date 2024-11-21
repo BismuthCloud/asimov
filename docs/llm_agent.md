@@ -255,11 +255,11 @@ flow_control = Node(
             decisions=[
                 FlowDecision(
                     next_node="executor",
-                    condition="plan != null and current_step < len(plan)"
+                    condition="plan ~= nil and current_step < #plan" # Conditions are lua
                 ),
                 FlowDecision(
                     next_node="flow_control",
-                    condition="execution_history != null"
+                    condition="execution_history ~= nil" # Conditions are lua 
                 )
             ],
             default="planner"
