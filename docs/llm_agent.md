@@ -99,7 +99,7 @@ class LLMPlannerModule(AgentModule):
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY environment variable must be set")
         self.client = AnthropicInferenceClient(
-            model="claude-3", api_key=api_key
+            model="claude-3-5-sonnet-20241022", api_key=api_key
         )
 
     async def process(
@@ -164,7 +164,7 @@ class LLMExecutorModule(AgentModule):
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY environment variable must be set")
         self.client = AnthropicInferenceClient(
-            model="claude-3",
+            model="claude-3-5-sonnet-20241022",
             api_key=api_key
         )
 
@@ -253,7 +253,7 @@ class LLMFlowControlModule(AgentModule):
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY environment variable must be set")
         self.client = AnthropicInferenceClient(
-            model="claude-3", api_key=api_key
+            model="claude-3-5-sonnet-20241022", api_key=api_key
         )
 
     async def process(

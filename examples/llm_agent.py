@@ -25,7 +25,13 @@ from asimov.graph import (
 )
 from asimov.graph.tasks import Task
 from asimov.caches.redis_cache import RedisCache
-from asimov.services.inference_clients import AnthropicInferenceClient, ChatMessage, ChatRole
+from asimov.services.inference_clients import (
+    AnthropicInferenceClient,
+    ChatMessage,
+    ChatRole,
+)
+
+from uuid import uuid4
 
 
 class LLMPlannerModule(AgentModule):
@@ -42,7 +48,7 @@ class LLMPlannerModule(AgentModule):
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY environment variable must be set")
         self.client = AnthropicInferenceClient(
-            model="claude-3", api_key=api_key
+            model="claude-3-5-sonnet-20241022", api_key=api_key
         )
 
     async def process(
@@ -68,9 +74,14 @@ class LLMPlannerModule(AgentModule):
         try:
             print(f"{self.name}: Sending planning request to LLM")
             response = await asyncio.wait_for(
-                self.client.get_generation([ChatMessage(role=ChatRole.USER, content=prompt)]), timeout=30.0
+                self.client.get_generation(
+                    [ChatMessage(role=ChatRole.USER, content=prompt)]
+                ),
+                timeout=30.0,
             )
-            response_content = response.choices[0].message.content
+
+            response_content = json.loads(response)["steps"]
+
             print(f"{self.name}: Received plan from LLM")
         except asyncio.TimeoutError:
             print(f"{self.name}: Timeout waiting for LLM response")
@@ -97,7 +108,7 @@ class LLMExecutorModule(AgentModule):
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY environment variable must be set")
         self.client = AnthropicInferenceClient(
-            model="claude-3", api_key=api_key
+            model="claude-3-5-sonnet-20241022", api_key=api_key
         )
 
     async def process(
@@ -105,9 +116,13 @@ class LLMExecutorModule(AgentModule):
     ) -> Dict[str, Any]:
         print(f"{self.name}: Starting execution process")
         try:
-            # Note the real cache uses jsonpickle and handles serialization and deserialization so you don't need to do this.
+            # Note the real cache and not the mock testing cache uses jsonpickle and handles serialization and deserialization so you don't need to do this.
             plan_json = await cache.get("plan")
-            plan = json.loads(plan_json) if isinstance(plan_json, (str, bytes)) else plan_json
+            plan = (
+                json.loads(plan_json)
+                if isinstance(plan_json, (str, bytes))
+                else plan_json
+            )
             current_step = await cache.get("current_step")
             task = await cache.get("task")
             print(f"{self.name}: Retrieved plan and current step {current_step}")
@@ -139,9 +154,11 @@ class LLMExecutorModule(AgentModule):
         try:
             print(f"{self.name}: Sending execution request to LLM")
             response = await asyncio.wait_for(
-                self.client.get_generation([ChatMessage(role=ChatRole.USER, content=prompt)]), timeout=30.0
+                self.client.get_generation(
+                    [ChatMessage(role=ChatRole.USER, content=prompt)]
+                ),
+                timeout=30.0,
             )
-            result = response.choices[0].message.content
             print(f"{self.name}: Received execution result from LLM")
         except asyncio.TimeoutError:
             print(f"{self.name}: Timeout waiting for LLM execution response")
@@ -151,7 +168,7 @@ class LLMExecutorModule(AgentModule):
         validation_prompt = f"""
         Step: {step['description']}
         Validation Criteria: {step['validation']}
-        Result: {result}
+        Result: {response}
 
         Evaluate if the step was completed successfully.
         Return either "success" or "failure" with a brief explanation.
@@ -159,10 +176,12 @@ class LLMExecutorModule(AgentModule):
 
         try:
             print(f"{self.name}: Sending validation request to LLM")
-            validation_response = await asyncio.wait_for(
-                self.client.get_generation([ChatMessage(role=ChatRole.USER, content=validation_prompt)]), timeout=30.0
+            validation_result = await asyncio.wait_for(
+                self.client.get_generation(
+                    [ChatMessage(role=ChatRole.USER, content=validation_prompt)]
+                ),
+                timeout=30.0,
             )
-            validation_result = validation_response.choices[0].message.content
             print(f"{self.name}: Received validation result from LLM")
         except asyncio.TimeoutError:
             print(f"{self.name}: Timeout waiting for LLM validation response")
@@ -178,10 +197,10 @@ class LLMExecutorModule(AgentModule):
         # Create execution record
         execution_record = {
             "step": step["description"],
-            "execution_result": result,
+            "execution_result": response,
             "validation": validation_result,
             "status": status,
-            "timestamp": str(asyncio.get_event_loop().time())
+            "timestamp": str(asyncio.get_event_loop().time()),
         }
 
         # Update execution history
@@ -209,7 +228,7 @@ class LLMFlowControlModule(AgentModule):
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY environment variable must be set")
         self.client = AnthropicInferenceClient(
-            model="claude-3", api_key=api_key
+            model="claude-3-5-sonnet-20241022", api_key=api_key
         )
 
     async def process(
@@ -217,7 +236,9 @@ class LLMFlowControlModule(AgentModule):
     ) -> Dict[str, Any]:
         print(f"{self.name}: Starting flow control process")
         plan_json = await cache.get("plan")
-        plan = json.loads(plan_json) if isinstance(plan_json, (str, bytes)) else plan_json
+        plan = (
+            json.loads(plan_json) if isinstance(plan_json, (str, bytes)) else plan_json
+        )
         current_step = await cache.get("current_step")
         execution_history = await cache.get("execution_history", [])
         print(
@@ -247,7 +268,10 @@ class LLMFlowControlModule(AgentModule):
         try:
             print(f"{self.name}: Sending analysis request to LLM")
             response = await asyncio.wait_for(
-                self.client.get_generation([ChatMessage(role=ChatRole.USER, content=prompt)]), timeout=30.0
+                self.client.get_generation(
+                    [ChatMessage(role=ChatRole.USER, content=prompt)]
+                ),
+                timeout=30.0,
             )
             analysis = response.choices[0].message.content
             print(f"{self.name}: Received analysis result from LLM")
@@ -267,7 +291,12 @@ class LLMFlowControlModule(AgentModule):
 async def main():
     print("Starting LLM agent example")
     # Create the agent
-    agent = Agent(cache=RedisCache(), max_concurrent_tasks=1, max_total_iterations=20)
+
+    agent = Agent(
+        cache=RedisCache(default_prefix=str(uuid4())),
+        max_concurrent_tasks=1,
+        max_total_iterations=20,
+    )
     print("Agent created with Redis cache")
 
     # Create nodes
@@ -310,9 +339,7 @@ async def main():
     )
 
     # Add nodes to agent
-    agent.add_multiple_nodes(
-        [planner_node, executor_node, flow_control]
-    )
+    agent.add_multiple_nodes([planner_node, executor_node, flow_control])
 
     # Create and run a task
     task = Task(

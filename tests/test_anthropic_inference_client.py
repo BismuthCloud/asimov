@@ -11,7 +11,7 @@ from asimov.services.inference_clients import (
 async def test_tool_chain_streaming():
     # Mock response chunks that simulate the streaming response
     response_chunks = [
-        'data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","model":"claude-3","usage":{"input_tokens":10,"output_tokens":0},"content":[],"stop_reason":null}}\n',
+        'data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","model":"claude-3-5-sonnet-20241022","usage":{"input_tokens":10,"output_tokens":0},"content":[],"stop_reason":null}}\n',
         'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n',
         'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Let me check"}}\n',
         'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" the weather"}}\n',
@@ -58,7 +58,7 @@ async def test_tool_chain_streaming():
     mock_client.__aexit__.return_value = MagicMock()
 
     # Create the client and patch httpx.AsyncClient
-    client = AnthropicInferenceClient("claude-3", "test-key")
+    client = AnthropicInferenceClient("claude-3-5-sonnet-20241022", "test-key")
 
     with patch("httpx.AsyncClient") as mock_http_client:
         mock_http_client.return_value = mock_client

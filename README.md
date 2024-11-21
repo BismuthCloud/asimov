@@ -208,17 +208,19 @@ cache = RedisCache(
 ```python
 # Anthropic Client
 client = AnthropicInferenceClient(
-    model="claude-3",
+    model="claude-3-5-sonnet-20241022",
     api_key="your-api-key",
     api_url="https://api.anthropic.com/v1/messages"
 )
 
 # AWS Bedrock Client
 client = BedrockInferenceClient(
-    model="anthropic.claude-3",
+    model="anthropic.claude-3-5-sonnet-20241022-v2:0",
     region_name="us-east-1"
 )
 ```
+
+There is similar set up for VertexAI and OpenAI
 
 ### Task and Graph Setup
 ```python
