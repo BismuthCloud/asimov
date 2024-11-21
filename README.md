@@ -83,6 +83,7 @@ Asimov Agents is composed of three main components:
   - Dependency chain management
   - Automatic cleanup of completed nodes
   - Execution state tracking and recovery
+  - LLM directed flow for complex decisisons
 
 - **Snapshot System**
   - State preservation modes:
@@ -168,6 +169,79 @@ class FlowControlConfig:
     default: Optional[str] = None     # Default node
     cleanup_on_default: bool = True   # Cleanup on default
 ```
+
+### Agent Directed Flow Control
+
+Agent Directed Flow Control is a powerful feature that enables intelligent routing of tasks based on LLM decision making. It allows the system to:
+
+- Dynamically route tasks to specialized modules based on content analysis
+- Use example-based learning for routing decisions
+- Support multiple voters for consensus-based routing
+- Handle fallback cases with error handlers
+
+Example configuration:
+```python
+flow_control = Node(
+    name="flow_control",
+    type=ModuleType.FLOW_CONTROL,
+    modules=[
+        AgentDirectedFlowControl(
+            name="ContentFlowControl",
+            type=ModuleType.FLOW_CONTROL,
+            voters=3,  # Number of voters for consensus
+            inference_client=inference_client,
+            system_description="A system that handles various content creation tasks",
+            flow_config=AgentDrivenFlowControlConfig(
+                decisions=[
+                    AgentDrivenFlowDecision(
+                        next_node="blog_writer",
+                        metadata={"description": "Writes blog posts on technical topics"},
+                        examples=[
+                            Example(
+                                message="Write a blog post about AI agents",
+                                choices=[
+                                    {"choice": "blog_writer", "description": "Writes blog posts"},
+                                    {"choice": "code_writer", "description": "Writes code"}
+                                ],
+                                choice="blog_writer",
+                                reasoning="The request is specifically for blog content"
+                            )
+                        ]
+                    ),
+                    AgentDrivenFlowDecision(
+                        next_node="code_writer",
+                        metadata={"description": "Writes code examples and tutorials"},
+                        examples=[
+                            Example(
+                                message="Create a Python script for data processing",
+                                choices=[
+                                    {"choice": "blog_writer", "description": "Writes blog posts"},
+                                    {"choice": "code_writer", "description": "Writes code"}
+                                ],
+                                choice="code_writer",
+                                reasoning="The request is for code creation"
+                            )
+                        ]
+                    )
+                ],
+                default="error_handler"  # Fallback node for unmatched requests
+            )
+        )
+    ]
+)
+```
+
+Key features:
+- Example-based routing decisions with clear reasoning
+- Multiple voter support (configurable number of voters) for robust decision making
+- Specialized executor modules for different content types (e.g., blog posts, code)
+- Metadata-enriched routing configuration for better decision context
+- Fallback error handling for unmatched requests
+- Cached message passing between nodes using Redis
+- Asynchronous execution with semaphore control
+- Comprehensive error handling and reporting
+
+For a complete working example of Agent Directed Flow Control, check out the `examples/agent_directed_flow.py` file which demonstrates a content creation system that intelligently routes tasks between blog writing and code generation modules.
 
 ### Middleware System
 Middleware allows for processing interception:
