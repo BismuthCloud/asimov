@@ -66,13 +66,14 @@ class LLMPlannerModule(AgentModule):
             response = await asyncio.wait_for(
                 self.client.get_generation([ChatMessage(role=ChatRole.USER, content=prompt)]), timeout=30.0
             )
+            response_content = response.choices[0].message.content
             print(f"{self.name}: Received plan from LLM")
         except asyncio.TimeoutError:
             print(f"{self.name}: Timeout waiting for LLM response")
             raise
 
         # Store the plan
-        await cache.set("plan", json.loads(response))
+        await cache.set("plan", response_content)  # Store raw JSON string
         await cache.set("current_step", 0)
 
         return {"status": "success", "result": "Plan created successfully"}
@@ -98,7 +99,8 @@ class LLMExecutorModule(AgentModule):
         print(f"{self.name}: Starting execution process")
         try:
             # Note the real cache uses jsonpickle and handles serialization and deserialization so you don't need to do this.
-            plan = json.loads(await cache.get("plan"))
+            plan_json = await cache.get("plan")
+            plan = json.loads(plan_json) if isinstance(plan_json, (str, bytes)) else plan_json
             current_step = await cache.get("current_step")
             task = await cache.get("task")
             print(f"{self.name}: Retrieved plan and current step {current_step}")
@@ -129,9 +131,10 @@ class LLMExecutorModule(AgentModule):
         # Execute step with LLM
         try:
             print(f"{self.name}: Sending execution request to LLM")
-            result = await asyncio.wait_for(
+            response = await asyncio.wait_for(
                 self.client.get_generation([ChatMessage(role=ChatRole.USER, content=prompt)]), timeout=30.0
             )
+            result = response.choices[0].message.content
             print(f"{self.name}: Received execution result from LLM")
         except asyncio.TimeoutError:
             print(f"{self.name}: Timeout waiting for LLM execution response")
@@ -149,9 +152,10 @@ class LLMExecutorModule(AgentModule):
 
         try:
             print(f"{self.name}: Sending validation request to LLM")
-            validation_result = await asyncio.wait_for(
+            validation_response = await asyncio.wait_for(
                 self.client.get_generation([ChatMessage(role=ChatRole.USER, content=validation_prompt)]), timeout=30.0
             )
+            validation_result = validation_response.choices[0].message.content
             print(f"{self.name}: Received validation result from LLM")
         except asyncio.TimeoutError:
             print(f"{self.name}: Timeout waiting for LLM validation response")
@@ -192,7 +196,8 @@ class LLMFlowControlModule(AgentModule):
         self, cache: Cache, semaphore: asyncio.Semaphore
     ) -> Dict[str, Any]:
         print(f"{self.name}: Starting flow control process")
-        plan = await cache.get("plan")
+        plan_json = await cache.get("plan")
+        plan = json.loads(plan_json) if isinstance(plan_json, (str, bytes)) else plan_json
         current_step = await cache.get("current_step")
         execution_history = await cache.get("execution_history", [])
         print(
@@ -222,7 +227,7 @@ class LLMFlowControlModule(AgentModule):
         try:
             print(f"{self.name}: Sending analysis request to LLM")
             response = await asyncio.wait_for(
-                self.client.complete(prompt), timeout=30.0
+                self.client.get_generation([ChatMessage(role=ChatRole.USER, content=prompt)]), timeout=30.0
             )
             analysis = response.choices[0].message.content
             print(f"{self.name}: Received analysis result from LLM")

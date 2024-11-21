@@ -31,7 +31,9 @@ class MockAnthropicClient:
         self.responses = responses or {}
         self.default_response = MockAnthropicResponse("Default mock response")
 
-    async def complete(self, prompt: str) -> MockAnthropicResponse:
+    async def get_generation(self, messages: List[Any]) -> MockAnthropicResponse:
+        # Extract prompt from messages
+        prompt = messages[-1].content if messages else ""
         # Return predefined response if available, otherwise default
         for key, response in self.responses.items():
             if key.lower() in prompt.lower():
