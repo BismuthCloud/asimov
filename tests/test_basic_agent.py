@@ -20,6 +20,7 @@ def mock_cache():
     return MockRedisCache()
 
 @pytest.fixture
+@pytest.mark.asyncio
 async def basic_agent(mock_cache):
     """Setup and cleanup for basic agent tests."""
     print("Setting up basic agent for test")
@@ -78,19 +79,21 @@ async def basic_agent(mock_cache):
 
 @pytest.mark.asyncio
 async def test_basic_agent_initialization(basic_agent):
+    agent = await basic_agent
     """Test that the basic agent is initialized with correct components."""
-    assert len(basic_agent.nodes) == 3
-    assert "planner" in basic_agent.nodes
-    assert "executor" in basic_agent.nodes
-    assert "flow_control" in basic_agent.nodes
+    assert len(agent.nodes) == 3
+    assert "planner" in agent.nodes
+    assert "executor" in agent.nodes
+    assert "flow_control" in agent.nodes
     
     # Verify node types
-    assert basic_agent.nodes["planner"].type == ModuleType.PLANNER
-    assert basic_agent.nodes["executor"].type == ModuleType.EXECUTOR
-    assert basic_agent.nodes["flow_control"].type == ModuleType.FLOW_CONTROL
+    assert agent.nodes["planner"].type == ModuleType.PLANNER
+    assert agent.nodes["executor"].type == ModuleType.EXECUTOR
+    assert agent.nodes["flow_control"].type == ModuleType.FLOW_CONTROL
 
 @pytest.mark.asyncio
 async def test_text_planning(basic_agent, mock_cache):
+    agent = await basic_agent
     """Test the text planning functionality."""
     task = Task(
         type="text_processing",
@@ -99,7 +102,7 @@ async def test_text_planning(basic_agent, mock_cache):
     )
     
     # Run just the planner node
-    planner_node = basic_agent.nodes["planner"]
+    planner_node = agent.nodes["planner"]
     await planner_node.process(task.id, mock_cache)
     
     # Verify plan was created and stored
@@ -112,6 +115,7 @@ async def test_text_planning(basic_agent, mock_cache):
 
 @pytest.mark.asyncio
 async def test_text_execution(basic_agent, mock_cache):
+    agent = await basic_agent
     """Test the text execution functionality."""
     # Setup test data
     test_plan = {
@@ -131,7 +135,7 @@ async def test_text_execution(basic_agent, mock_cache):
     await mock_cache.set("task", test_task)
     
     # Run executor node
-    executor_node = basic_agent.nodes["executor"]
+    executor_node = agent.nodes["executor"]
     result = await executor_node.process(test_task.id, mock_cache)
     
     # Verify results
@@ -153,6 +157,7 @@ from functools import partial
 @pytest.mark.asyncio
 @pytest.mark.timeout(5)  # 5 second timeout
 async def test_end_to_end_processing(basic_agent, mock_cache):
+    agent = await basic_agent
     # Add logging
     print('Starting end-to-end test')
     """Test complete end-to-end text processing."""
@@ -167,7 +172,7 @@ async def test_end_to_end_processing(basic_agent, mock_cache):
     # Run the task
     print(f"Running task: {task.objective}")
     try:
-        await asyncio.wait_for(basic_agent.run_task(task), timeout=4.0)  # 4 second timeout
+        await asyncio.wait_for(agent.run_task(task), timeout=4.0)  # 4 second timeout
         print("Task completed successfully")
     except asyncio.TimeoutError:
         print("Task execution timed out")
@@ -178,7 +183,7 @@ async def test_end_to_end_processing(basic_agent, mock_cache):
     
     print("Verifying executor results")
     # Get final results from the executor node
-    result = basic_agent.node_results.get("executor", {})
+    result = agent.node_results.get("executor", {})
     assert result.get("status") == "success"
     
     results = result.get("result", [])
