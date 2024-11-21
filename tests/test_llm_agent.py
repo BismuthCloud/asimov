@@ -181,6 +181,20 @@ async def test_llm_execution(llm_agent, mock_cache):
     assert "validation" in result["result"]
     assert "success" in result["result"]["validation"].lower()
 
+    # Verify execution history was updated
+    execution_history = await mock_cache.get("execution_history")
+    assert execution_history is not None
+    assert len(execution_history) == 1  # Should have one entry after first execution
+    
+    history_entry = execution_history[0]
+    assert "step" in history_entry
+    assert "execution_result" in history_entry
+    assert "validation" in history_entry
+    assert "status" in history_entry
+    assert "timestamp" in history_entry
+    assert history_entry["status"] == "success"
+    assert history_entry["step"] == "Research AI agents"
+
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(30)  # 30 second timeout

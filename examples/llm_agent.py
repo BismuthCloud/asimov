@@ -168,13 +168,23 @@ class LLMExecutorModule(AgentModule):
         else:
             status = "error"
 
+        # Create execution record
+        execution_record = {
+            "step": step["description"],
+            "execution_result": result,
+            "validation": validation_result,
+            "status": status,
+            "timestamp": str(asyncio.get_event_loop().time())
+        }
+
+        # Update execution history
+        execution_history = await cache.get("execution_history", [])
+        execution_history.append(execution_record)
+        await cache.set("execution_history", execution_history)
+
         return {
             "status": status,
-            "result": {
-                "step": step["description"],
-                "execution_result": result,
-                "validation": validation_result,
-            },
+            "result": execution_record,
         }
 
 
