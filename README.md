@@ -347,8 +347,8 @@ pytest tests/
 ```
 
 ### Required Dependencies
-- Redis server
-- Python 3.7+
+- Redis server (If using caching)
+- Python 3.12+
 - See requirements.txt for Python packages
 
 ## License
