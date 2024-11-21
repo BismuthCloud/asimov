@@ -4,7 +4,7 @@ This walkthrough will guide you through creating a simple agent using the Asimov
 
 ## Prerequisites
 
-- Python 3.7+
+- Python 3.12+
 - Redis server running
 - Asimov Agents package installed
 
