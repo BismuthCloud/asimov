@@ -7,9 +7,30 @@ This walkthrough will guide you through creating an agent that uses Large Langua
 - Python 3.12+
 - Redis server running (see Redis Setup below)
 - Asimov Agents package installed
-- API key for an LLM provider (e.g., Anthropic, AWS Bedrock)
+- API key for an LLM provider (e.g., Anthropic, AWS Bedrock) set in the ANTHROPIC_API_KEY environment variable (see Environment Setup below)
 
-## Redis Setup with Docker
+## Environment Setup
+
+### API Key Configuration
+
+Before running the agent, you need to set up your Anthropic API key as an environment variable:
+
+```bash
+# Linux/macOS
+export ANTHROPIC_API_KEY="your-api-key"
+
+# Windows (Command Prompt)
+set ANTHROPIC_API_KEY=your-api-key
+
+# Windows (PowerShell)
+$env:ANTHROPIC_API_KEY="your-api-key"
+```
+
+The agent will automatically use this environment variable for authentication with the Anthropic API.
+
+> **Security Note**: Never hardcode API keys in your source code. Always use environment variables or secure configuration management systems to handle sensitive credentials. This helps prevent accidental exposure of API keys in version control systems or logs.
+
+### Redis Setup with Docker
 
 To run Redis using Docker:
 
@@ -41,6 +62,7 @@ This will start Redis on the default port 6379. The container will run in the ba
 Create a new Python file `llm_agent.py` and import the necessary modules:
 
 ```python
+import os
 import asyncio
 from typing import Dict, Any, List
 from asimov.graph import (
@@ -73,8 +95,11 @@ class LLMPlannerModule(AgentModule):
 
     def __init__(self):
         super().__init__()
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY environment variable must be set")
         self.client = AnthropicInferenceClient(
-            model="claude-3", api_key="your-api-key"  # Replace with your API key
+            model="claude-3", api_key=api_key
         )
 
     async def process(
@@ -116,10 +141,11 @@ class LLMPlannerModule(AgentModule):
 ```
 
 Key points:
-- Initializes LLM client in constructor
+- Initializes LLM client in constructor with API key from environment variable
 - Creates structured prompts for the LLM
 - Stores plan and progress in cache
 - Uses standardized response format
+- Implements secure credential handling
 
 ### 3. Creating the LLM Executor Module
 
@@ -134,9 +160,12 @@ class LLMExecutorModule(AgentModule):
 
     def __init__(self):
         super().__init__()
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY environment variable must be set")
         self.client = AnthropicInferenceClient(
             model="claude-3",
-            api_key="your-api-key"
+            api_key=api_key
         )
 
     async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
@@ -220,8 +249,11 @@ class LLMFlowControlModule(AgentModule):
 
     def __init__(self):
         super().__init__()
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY environment variable must be set")
         self.client = AnthropicInferenceClient(
-            model="claude-3", api_key="your-api-key"  # Replace with your API key
+            model="claude-3", api_key=api_key
         )
 
     async def process(

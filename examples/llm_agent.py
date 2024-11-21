@@ -9,6 +9,7 @@ for task planning and execution. The agent will:
 """
 
 import json
+import os
 import asyncio
 from typing import Dict, Any
 from asimov.graph import (
@@ -37,8 +38,11 @@ class LLMPlannerModule(AgentModule):
 
     def __init__(self):
         super().__init__()
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY environment variable must be set")
         self.client = AnthropicInferenceClient(
-            model="claude-3", api_key="your-api-key"  # Replace with your API key
+            model="claude-3", api_key=api_key
         )
 
     async def process(
@@ -89,8 +93,11 @@ class LLMExecutorModule(AgentModule):
 
     def __init__(self):
         super().__init__()
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY environment variable must be set")
         self.client = AnthropicInferenceClient(
-            model="claude-3", api_key="your-api-key"  # Replace with your API key
+            model="claude-3", api_key=api_key
         )
 
     async def process(
@@ -198,8 +205,11 @@ class LLMFlowControlModule(AgentModule):
 
     def __init__(self):
         super().__init__()
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY environment variable must be set")
         self.client = AnthropicInferenceClient(
-            model="claude-3", api_key="your-api-key"  # Replace with your API key
+            model="claude-3", api_key=api_key
         )
 
     async def process(

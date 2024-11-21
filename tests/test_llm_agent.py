@@ -1,8 +1,9 @@
 import pytest
 import pytest_asyncio
 import asyncio
+import os
 from typing import Dict, Any, List
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock, AsyncMock, patch
 import json
 
 from asimov.graph import (
@@ -40,6 +41,14 @@ class MockAnthropicClient:
                 return MockAnthropicResponse(response)
         return self.default_response
 
+
+@pytest.fixture(autouse=True)
+def setup_env():
+    """Set up test environment variables."""
+    os.environ["ANTHROPIC_API_KEY"] = "test-api-key"
+    yield
+    if "ANTHROPIC_API_KEY" in os.environ:
+        del os.environ["ANTHROPIC_API_KEY"]
 
 @pytest.fixture
 def mock_cache():
@@ -235,6 +244,21 @@ async def test_end_to_end_processing(llm_agent, mock_cache):
     result = executor_result.get("results", [])[0]["result"]
     assert "step" in result
 
+
+@pytest.mark.asyncio
+async def test_missing_api_key():
+    """Test that modules properly handle missing API key."""
+    if "ANTHROPIC_API_KEY" in os.environ:
+        del os.environ["ANTHROPIC_API_KEY"]
+    
+    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY environment variable must be set"):
+        LLMPlannerModule()
+    
+    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY environment variable must be set"):
+        LLMExecutorModule()
+    
+    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY environment variable must be set"):
+        LLMFlowControlModule()
 
 @pytest.mark.asyncio
 async def test_error_handling(llm_agent, mock_cache):
