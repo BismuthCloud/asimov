@@ -134,7 +134,7 @@ Description of the system: {self.system_description}
 
     async def run(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
         self._logger = logging.getLogger(__name__).getChild(
-            await cache.get("request_id")
+            await cache.get("request_id", "task_logger")
         )
 
         message = await cache.get(self.input_var)
