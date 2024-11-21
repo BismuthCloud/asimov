@@ -12,6 +12,9 @@ We support advanced features like State Snapshotting, Middleware, Agent Directed
 🔮 Asimov is the foundation of [bismuth.sh](https://waitlist.bismuth.sh) an in terminal coding agent that can handle many tasks autonomously. Check us out! 🔮
 
 ## Quickstart
+```bash
+pip install asimov_agents
+```
 
 Checkout [these docs](https://github.com/BismuthCloud/asimov/tree/main/docs) which show off two basic examples that should be enough to get you experimenting!
 
