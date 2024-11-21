@@ -139,7 +139,7 @@ flow_control = Node(
             decisions=[
                 FlowDecision(
                     next_node="executor",
-                    condition="plan != null"
+                    condition="plan ~= null" # Conditions are lua.
                 )
             ],
             default="planner"
