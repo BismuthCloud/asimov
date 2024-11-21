@@ -21,7 +21,7 @@ Asimov Agents is composed of three main components:
    - Supports multiple LLM providers:
      - Anthropic Claude (via API)
      - AWS Bedrock
-     - OpenAI
+     - OpenAI (Including local models)
      - Vertex
    - Features:
      - Streaming responses
