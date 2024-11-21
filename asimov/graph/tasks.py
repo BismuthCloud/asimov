@@ -1,5 +1,3 @@
-# BISMUTH FILE: tasks.py
-
 from enum import Enum
 from uuid import uuid4, UUID
 from typing import Dict, Any, Optional

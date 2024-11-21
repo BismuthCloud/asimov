@@ -1,5 +1,3 @@
-# BISMUTH FILE: db_manager.py
-
 import psycopg2
 from threading import Lock
 import contextlib
