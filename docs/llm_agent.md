@@ -41,16 +41,16 @@ from asimov.caches.redis_cache import RedisCache
 from asimov.services.inference_clients import AnthropicInferenceClient
 ```
 
-### 2. Creating the LLM Planner Module
+### 2. Creating the Planning Executor Module
 
-The planner module uses an LLM to analyze tasks and create execution plans:
+The planning executor module uses an LLM to analyze tasks and create execution plans:
 
 ```python
 class LLMPlannerModule(AgentModule):
     """Uses LLM to plan task execution."""
     
     name = "llm_planner"
-    type = ModuleType.PLANNER
+    type = ModuleType.EXECUTOR
 
     def __init__(self):
         super().__init__()
@@ -178,16 +178,16 @@ Key points:
 - Maintains progress through steps
 - Includes detailed results and validation
 
-### 4. Adding a Discriminator Module
+### 4. Adding a Flow Control Module
 
-The discriminator module makes decisions about execution flow:
+The flow control module makes decisions about execution flow:
 
 ```python
-class LLMDiscriminatorModule(AgentModule):
+class LLMFlowControlModule(AgentModule):
     """Makes decisions about execution flow based on LLM analysis."""
     
-    name = "llm_discriminator"
-    type = ModuleType.DISCRIMINATOR
+    name = "llm_flow_control"
+    type = ModuleType.FLOW_CONTROL
 
     def __init__(self):
         super().__init__()
@@ -258,7 +258,7 @@ flow_control = Node(
                     condition="plan != null and current_step < len(plan)"
                 ),
                 FlowDecision(
-                    next_node="discriminator",
+                    next_node="flow_control",
                     condition="execution_history != null"
                 )
             ],
@@ -284,7 +284,7 @@ async def main():
     # Create and add nodes
     planner_node = Node(
         name="planner",
-        type=ModuleType.PLANNER,
+        type=ModuleType.EXECUTOR,
         modules=[LLMPlannerModule()],
         node_config=NodeConfig(
             parallel=False,
@@ -296,13 +296,13 @@ async def main():
         name="executor",
         type=ModuleType.EXECUTOR,
         modules=[LLMExecutorModule()],
-        dependencies=["planner", "discriminator"]
+        dependencies=["planner", "flow_control"]
     )
     
-    discriminator_node = Node(
-        name="discriminator",
-        type=ModuleType.DISCRIMINATOR,
-        modules=[LLMDiscriminatorModule()],
+    flow_control_node = Node(
+        name="flow_control",
+        type=ModuleType.FLOW_CONTROL,
+        modules=[LLMFlowControlModule()],
         dependencies=["executor"]
     )
     
@@ -310,7 +310,7 @@ async def main():
     agent.add_multiple_nodes([
         planner_node,
         executor_node,
-        discriminator_node,
+        flow_control_node,
         flow_control
     ])
     

@@ -39,16 +39,16 @@ from asimov.graph.tasks import Task
 from asimov.caches.redis_cache import RedisCache
 ```
 
-### 2. Creating the Planner Module
+### 2. Creating the Planning Executor Module
 
-The planner module is responsible for analyzing the task and creating a plan:
+The planning executor module is responsible for analyzing the task and creating a plan:
 
 ```python
 class TextPlannerModule(AgentModule):
     """Plans text processing operations."""
     
     name = "text_planner"
-    type = ModuleType.PLANNER
+    type = ModuleType.EXECUTOR
 
     async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
         # Get the task from cache
@@ -74,7 +74,7 @@ class TextPlannerModule(AgentModule):
 
 Key points:
 - The module inherits from `AgentModule`
-- It has a unique name and type
+- It has a unique name and is an EXECUTOR type
 - The `process` method contains the core logic
 - Uses cache for state management
 - Returns a standardized response format
@@ -169,7 +169,7 @@ async def main():
     # Create nodes
     planner_node = Node(
         name="planner",
-        type=ModuleType.PLANNER,
+        type=ModuleType.EXECUTOR,
         modules=[TextPlannerModule()],
         node_config=NodeConfig(
             parallel=False,
