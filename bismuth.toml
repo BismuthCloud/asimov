@@ -1,0 +1,4 @@
+[chat]
+# Timeout in seconds for commands run by the agent.
+# If omitted, defaults to 60.
+command_timeout = 320
