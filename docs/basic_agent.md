@@ -5,8 +5,25 @@ This walkthrough will guide you through creating a simple agent using the Asimov
 ## Prerequisites
 
 - Python 3.12+
-- Redis server running
+- Redis server running (see Redis Setup below)
 - Asimov Agents package installed
+
+## Redis Setup with Docker
+
+To run Redis using Docker:
+
+```bash
+# Pull the official Redis image
+docker pull redis:latest
+
+# Run Redis container
+docker run --name asimov-redis -d -p 6379:6379 redis:latest
+
+# Verify Redis is running
+docker ps | grep asimov-redis
+```
+
+This will start Redis on the default port 6379. The container will run in the background and restart automatically unless explicitly stopped.
 
 ## Concepts Covered
 
