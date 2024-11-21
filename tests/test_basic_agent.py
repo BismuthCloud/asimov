@@ -20,7 +20,10 @@ def mock_cache():
     return MockRedisCache()
 
 @pytest.fixture
-def basic_agent(mock_cache):
+async def basic_agent(mock_cache):
+    """Setup and cleanup for basic agent tests."""
+    print("Setting up basic agent for test")
+    # Setup
     agent = Agent(
         cache=mock_cache,
         max_concurrent_tasks=1,
@@ -65,7 +68,13 @@ def basic_agent(mock_cache):
     
     # Add nodes to agent
     agent.add_multiple_nodes([planner_node, executor_node, flow_control])
-    return agent
+    
+    try:
+        yield agent
+    finally:
+        print("Starting basic agent cleanup")
+        await agent.cleanup()
+        print("Basic agent cleanup complete")
 
 @pytest.mark.asyncio
 async def test_basic_agent_initialization(basic_agent):
@@ -138,8 +147,14 @@ async def test_text_execution(basic_agent, mock_cache):
     assert stats_result["result"]["characters"] == 11  # Length of "Hello world"
     assert stats_result["result"]["lines"] == 1
 
+import asyncio
+from functools import partial
+
 @pytest.mark.asyncio
+@pytest.mark.timeout(5)  # 5 second timeout
 async def test_end_to_end_processing(basic_agent, mock_cache):
+    # Add logging
+    print('Starting end-to-end test')
     """Test complete end-to-end text processing."""
     task = Task(
         type="text_processing",
@@ -150,8 +165,18 @@ async def test_end_to_end_processing(basic_agent, mock_cache):
     )
     
     # Run the task
-    await basic_agent.run_task(task)
+    print(f"Running task: {task.objective}")
+    try:
+        await asyncio.wait_for(basic_agent.run_task(task), timeout=4.0)  # 4 second timeout
+        print("Task completed successfully")
+    except asyncio.TimeoutError:
+        print("Task execution timed out")
+        raise
+    except Exception as e:
+        print(f"Task execution failed: {str(e)}")
+        raise
     
+    print("Verifying executor results")
     # Get final results from the executor node
     result = basic_agent.node_results.get("executor", {})
     assert result.get("status") == "success"
@@ -180,8 +205,18 @@ async def test_error_handling(basic_agent, mock_cache):
     )
     
     # Run the task and expect it to complete (even with empty text)
-    await basic_agent.run_task(task)
+    print(f"Running error handling test with task: {task.objective}")
+    try:
+        await asyncio.wait_for(basic_agent.run_task(task), timeout=4.0)  # 4 second timeout
+        print("Error handling test completed")
+    except asyncio.TimeoutError:
+        print("Error handling test timed out")
+        raise
+    except Exception as e:
+        print(f"Error handling test failed: {str(e)}")
+        raise
     
+    print("Verifying error handling results")
     # Verify results still contain expected structure
     result = basic_agent.node_results.get("executor", {})
     assert result.get("status") == "success"

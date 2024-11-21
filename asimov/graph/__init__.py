@@ -39,6 +39,7 @@ class TasksFinished(Exception):
 
 class ModuleType(Enum):
     EXECUTOR = "executor"
+    SUBGRAPH = "subgraph"
     FLOW_CONTROL = "flow_control"
 
 
@@ -817,6 +818,7 @@ class Agent(AsimovBase):
 
         return result
 
+    def compile_execution_plan(self) -> ExecutionPlan:
         plan = self._topological_sort(self.graph)
         return [
             ExecutionStep(

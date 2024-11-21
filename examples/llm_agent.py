@@ -42,7 +42,13 @@ class LLMPlannerModule(AgentModule):
         )
 
     async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
-        task = await cache.get("task")
+        print(f"{self.name}: Starting planning process")
+        try:
+            task = await asyncio.wait_for(cache.get("task"), timeout=5.0)
+            print(f"{self.name}: Retrieved task: {task.objective}")
+        except asyncio.TimeoutError:
+            print(f"{self.name}: Timeout retrieving task")
+            raise
         
         # Create a planning prompt
         prompt = f"""
@@ -57,8 +63,14 @@ class LLMPlannerModule(AgentModule):
         """
         
         # Get plan from LLM
-        response = await self.client.complete(prompt)
-        plan = response.choices[0].message.content
+        try:
+            print(f"{self.name}: Sending planning request to LLM")
+            response = await asyncio.wait_for(self.client.complete(prompt), timeout=30.0)
+            plan = response.choices[0].message.content
+            print(f"{self.name}: Received plan from LLM")
+        except asyncio.TimeoutError:
+            print(f"{self.name}: Timeout waiting for LLM response")
+            raise
         
         # Store the plan
         await cache.set("plan", plan)
@@ -86,9 +98,15 @@ class LLMExecutorModule(AgentModule):
         )
 
     async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
-        plan = await cache.get("plan")
-        current_step = await cache.get("current_step")
-        task = await cache.get("task")
+        print(f"{self.name}: Starting execution process")
+        try:
+            plan = await asyncio.wait_for(cache.get("plan"), timeout=5.0)
+            current_step = await asyncio.wait_for(cache.get("current_step"), timeout=5.0)
+            task = await asyncio.wait_for(cache.get("task"), timeout=5.0)
+            print(f"{self.name}: Retrieved plan and current step {current_step}")
+        except asyncio.TimeoutError:
+            print(f"{self.name}: Timeout retrieving task data")
+            raise
         
         if current_step >= len(plan):
             return {
@@ -112,8 +130,14 @@ class LLMExecutorModule(AgentModule):
         """
         
         # Execute step with LLM
-        response = await self.client.complete(prompt)
-        result = response.choices[0].message.content
+        try:
+            print(f"{self.name}: Sending execution request to LLM")
+            response = await asyncio.wait_for(self.client.complete(prompt), timeout=30.0)
+            result = response.choices[0].message.content
+            print(f"{self.name}: Received execution result from LLM")
+        except asyncio.TimeoutError:
+            print(f"{self.name}: Timeout waiting for LLM execution response")
+            raise
         
         # Validate step
         validation_prompt = f"""
@@ -125,8 +149,14 @@ class LLMExecutorModule(AgentModule):
         Return either "success" or "failure" with a brief explanation.
         """
         
-        validation = await self.client.complete(validation_prompt)
-        validation_result = validation.choices[0].message.content
+        try:
+            print(f"{self.name}: Sending validation request to LLM")
+            validation = await asyncio.wait_for(self.client.complete(validation_prompt), timeout=30.0)
+            validation_result = validation.choices[0].message.content
+            print(f"{self.name}: Received validation result from LLM")
+        except asyncio.TimeoutError:
+            print(f"{self.name}: Timeout waiting for LLM validation response")
+            raise
         
         if "success" in validation_result.lower():
             current_step += 1
@@ -161,9 +191,15 @@ class LLMFlowControlModule(AgentModule):
         )
 
     async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
-        plan = await cache.get("plan")
-        current_step = await cache.get("current_step")
-        execution_history = await cache.get("execution_history", [])
+        print(f"{self.name}: Starting flow control process")
+        try:
+            plan = await asyncio.wait_for(cache.get("plan"), timeout=5.0)
+            current_step = await asyncio.wait_for(cache.get("current_step"), timeout=5.0)
+            execution_history = await asyncio.wait_for(cache.get("execution_history", []), timeout=5.0)
+            print(f"{self.name}: Retrieved plan and history with {len(execution_history)} entries")
+        except asyncio.TimeoutError:
+            print(f"{self.name}: Timeout retrieving flow control data")
+            raise
         
         if not execution_history:
             return {
@@ -188,8 +224,14 @@ class LLMFlowControlModule(AgentModule):
         Provide your decision and reasoning.
         """
         
-        response = await self.client.complete(prompt)
-        analysis = response.choices[0].message.content
+        try:
+            print(f"{self.name}: Sending analysis request to LLM")
+            response = await asyncio.wait_for(self.client.complete(prompt), timeout=30.0)
+            analysis = response.choices[0].message.content
+            print(f"{self.name}: Received analysis result from LLM")
+        except asyncio.TimeoutError:
+            print(f"{self.name}: Timeout waiting for LLM analysis response")
+            raise
         
         return {
             "status": "success",
@@ -201,12 +243,14 @@ class LLMFlowControlModule(AgentModule):
 
 
 async def main():
+    print("Starting LLM agent example")
     # Create the agent
     agent = Agent(
         cache=RedisCache(),
         max_concurrent_tasks=1,
         max_total_iterations=20
     )
+    print("Agent created with Redis cache")
     
     # Create nodes
     planner_node = Node(

@@ -219,7 +219,9 @@ async def test_llm_discrimination(llm_agent, mock_cache):
     assert "analysis" in result["result"]
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(30)  # 30 second timeout
 async def test_end_to_end_processing(llm_agent, mock_cache):
+    print("Starting end-to-end LLM agent test")
     """Test complete end-to-end content creation process."""
     task = Task(
         type="content_creation",
@@ -232,8 +234,18 @@ async def test_end_to_end_processing(llm_agent, mock_cache):
     )
     
     # Run the task
-    await llm_agent.run_task(task)
+    print(f"Running task: {task.objective}")
+    try:
+        await asyncio.wait_for(llm_agent.run_task(task), timeout=25.0)  # 25 second timeout
+        print("Task completed successfully")
+    except asyncio.TimeoutError:
+        print("Task execution timed out")
+        raise
+    except Exception as e:
+        print(f"Task execution failed: {str(e)}")
+        raise
     
+    print("Verifying node results")
     # Verify results from each node
     planner_result = llm_agent.node_results.get("planner", {})
     assert planner_result.get("status") == "success"

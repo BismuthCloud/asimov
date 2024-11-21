@@ -32,9 +32,11 @@ class TextPlannerModule(AgentModule):
     type: ModuleType = ModuleType.EXECUTOR
 
     async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
+        print(f"{self.name}: Starting planning process")
         # Get the task from cache
         task = await cache.get("task")
         text = task.params.get("text", "")
+        print(f"{self.name}: Retrieved task with text length {len(text)}")
         
         # Create a simple plan
         plan = {
@@ -60,9 +62,11 @@ class TextExecutorModule(AgentModule):
     type: ModuleType = ModuleType.EXECUTOR
 
     async def process(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
+        print(f"{self.name}: Starting execution process")
         # Get the plan and task
         plan = await cache.get("plan")
         task = await cache.get("task")
+        print(f"{self.name}: Retrieved plan with {len(plan['operations'])} operations")
         
         results = []
         for operation in plan["operations"]:
@@ -90,12 +94,14 @@ class TextExecutorModule(AgentModule):
 
 
 async def main():
+    print("Starting basic agent example")
     # Create the agent
     agent = Agent(
         cache=RedisCache(),
         max_concurrent_tasks=1,
         max_total_iterations=10
     )
+    print("Agent created with Redis cache")
     
     # Create nodes
     planner_node = Node(
