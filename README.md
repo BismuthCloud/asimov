@@ -9,7 +9,7 @@ A Python framework for building AI agent systems with robust task management, in
 
 ## Quickstart
 
-Checkout [these docs](https://github.com/BismuthCloud/asimov/tree/main/docs) which show off two basic examples that should be enough to get your experimenting!
+Checkout [these docs](https://github.com/BismuthCloud/asimov/tree/main/docs) which show off two basic examples that should be enough to get you experimenting!
 
 Further documentation greatly appreciated in PRs!
 
