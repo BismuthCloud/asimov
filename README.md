@@ -3,6 +3,8 @@
 
 [![](https://dcbadge.limes.pink/api/server/https://discord.gg/bismuthai)](https://discord.gg/bismuthai)
 
+👋 Hello AI Tinkerers Group! Welcome to:
+
 # Asimov Agents
 
 A Python framework for building AI agent systems with robust task management in the form of a graph execution engine, inference capabilities, and caching.
