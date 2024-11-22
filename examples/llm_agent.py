@@ -1,11 +1,11 @@
 """
-LLM-Based Agent Example
+Cartoon Writing LLM Agent Example
 
 This example demonstrates how to create an agent that uses Large Language Models (LLMs)
-for task planning and execution. The agent will:
-1. Use an LLM to analyze and plan a task
-2. Execute the plan using LLM-guided steps
-3. Use flow control to manage the execution flow and handle LLM responses
+for writing cartoon episodes. The agent will:
+1. Use an LLM to plan the cartoon episode creation process
+2. Execute the plan by developing characters and story elements
+3. Use flow control to manage the creative process and validate the output
 """
 
 import json
@@ -35,7 +35,7 @@ from uuid import uuid4
 
 
 class LLMPlannerModule(AgentModule):
-    """Uses LLM to plan task execution."""
+    """Uses LLM to plan cartoon episode creation."""
 
     name: str = "llm_planner"
     type: ModuleType = ModuleType.EXECUTOR
@@ -99,7 +99,7 @@ class LLMPlannerModule(AgentModule):
 
 
 class LLMExecutorModule(AgentModule):
-    """Executes steps using LLM guidance."""
+    """Executes cartoon creation steps using LLM guidance."""
 
     name: str = "llm_executor"
     type: ModuleType = ModuleType.EXECUTOR
@@ -219,7 +219,7 @@ class LLMExecutorModule(AgentModule):
 
 
 class LLMFlowControlModule(AgentModule):
-    """Makes decisions about execution flow based on LLM analysis."""
+    """Makes decisions about cartoon creation flow based on LLM analysis."""
 
     name: str = "llm_flow_control"
     type: ModuleType = ModuleType.FLOW_CONTROL

@@ -55,10 +55,10 @@ def mock_cache():
 def mock_anthropic_client():
     return MockAnthropicClient(
         {
-            "Create a step-by-step plan": '{"steps": [{"description": "Research AI agents", "requirements": "Access to documentation", "validation": "Comprehensive notes available"}, {"description": "Write introduction", "requirements": "Research notes", "validation": "Clear introduction exists"}]}',
-            "Execute this step": "Step executed successfully with the following results:\n1. Actions: Researched AI agents\n2. Outcome: Comprehensive notes created\n3. Output: 5 pages of detailed notes",
-            "Evaluate if the step": "success - all validation criteria met",
-            "Analyze the execution history": "Analysis complete. Decision: continue - execution is proceeding as expected",
+            "Create a step-by-step plan": '{"steps": [{"description": "Develop cartoon characters", "requirements": "Character design guidelines", "validation": "Character profiles with personalities and visual descriptions"}, {"description": "Create story outline", "requirements": "Character profiles", "validation": "Complete episode outline with plot points"}]}',
+            "Execute this step": "Step executed successfully with the following results:\n1. Actions: Created main character profiles\n2. Outcome: Developed 3 unique cartoon characters\n3. Output: Character sheets with personalities and visual descriptions",
+            "Evaluate if the step": "success - characters are well-defined with distinct traits",
+            "Analyze the execution history": "Analysis complete. Decision: continue - character development is on track",
         }
     )
 
@@ -124,8 +124,8 @@ async def test_llm_planning(llm_agent, mock_cache):
     """Test the LLM-based planning functionality."""
     task = Task(
         type="content_creation",
-        objective="Write a blog post",
-        params={"topic": "AI Testing", "length": "500 words"},
+        objective="Create a cartoon episode",
+        params={"genre": "Comedy", "duration": "11 minutes"},
     )
 
     await mock_cache.set("task", task)
@@ -155,15 +155,15 @@ async def test_llm_execution(llm_agent, mock_cache):
     # Setup test data
     task = Task(
         type="content_creation",
-        objective="Write a blog post",
-        params={"topic": "AI Testing"},
+        objective="Create a cartoon episode",
+        params={"genre": "Comedy", "duration": "11 minutes"},
     )
     plan = json.dumps(
         [
             {
-                "description": "Research AI agents",
-                "requirements": "Access to documentation",
-                "validation": "Comprehensive notes available",
+                "description": "Develop cartoon characters",
+                "requirements": "Character design guidelines",
+                "validation": "Character profiles with personalities and visual descriptions",
             }
         ]
     )
@@ -198,7 +198,7 @@ async def test_llm_execution(llm_agent, mock_cache):
     assert "status" in history_entry
     assert "timestamp" in history_entry
     assert history_entry["status"] == "success"
-    assert history_entry["step"] == "Research AI agents"
+    assert history_entry["step"] == "Develop cartoon characters"
 
 
 @pytest.mark.asyncio
@@ -208,11 +208,11 @@ async def test_end_to_end_processing(llm_agent, mock_cache):
     """Test complete end-to-end content creation process."""
     task = Task(
         type="content_creation",
-        objective="Write a blog post about AI agents",
+        objective="Create a cartoon episode",
         params={
-            "topic": "AI Agents in Production",
-            "length": "1000 words",
-            "style": "technical but accessible",
+            "genre": "Comedy",
+            "duration": "11 minutes",
+            "style": "family-friendly animation",
         },
     )
 
