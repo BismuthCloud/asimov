@@ -46,6 +46,8 @@ class AnthropicRequest(AsimovBase):
 
 
 class InferenceClient(ABC):
+    model: str
+
     _input_tokens: int = 0
     _output_tokens: int = 0
 
@@ -75,6 +77,7 @@ class InferenceClient(ABC):
 
     @abstractmethod
     async def tool_chain(
+        self,
         messages: List[ChatMessage],
         tools: List[Tuple[Callable, Dict[str, Any]]],
         max_tokens=8192,
@@ -150,7 +153,6 @@ class BedrockInferenceClient(InferenceClient):
         temperature=0.5,
         max_iterations=10,
         tool_choice="any",
-        keep_n_states=None,
     ):
         tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
@@ -225,10 +227,6 @@ class BedrockInferenceClient(InferenceClient):
                     }
                 )
 
-                if keep_n_states:
-                    serialized_messages = [
-                        serialized_messages[0]
-                    ] + serialized_messages[1:][-keep_n_states:]
         return serialized_messages
 
     @tracer.start_as_current_span(name="BedrockInferenceClient.connect_and_listen")
@@ -479,7 +477,6 @@ class AnthropicInferenceClient(InferenceClient):
         temperature=0.5,
         max_iterations=10,
         tool_choice="any",
-        keep_n_states=None,
     ):
         tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
@@ -496,7 +493,7 @@ class AnthropicInferenceClient(InferenceClient):
             }
             messages = messages[1:]
 
-        serialized_messages = [
+        serialized_messages: list[dict[str, Any]] = [
             {
                 "role": msg.role.value,
                 "content": [{"type": "text", "text": msg.content}],
@@ -520,7 +517,11 @@ class AnthropicInferenceClient(InferenceClient):
                     request.update(system)
 
                 current_content = []
-                current_block = {"type": None, "text": "", "tool_use": None}
+                current_block: dict[str, Any] = {
+                    "type": None,
+                    "text": "",
+                    "tool_use": None,
+                }
                 current_json = ""
 
                 for retry in range(5):
@@ -682,11 +683,6 @@ class AnthropicInferenceClient(InferenceClient):
                     serialized_messages[-1]["content"][0]["cache_control"] = {
                         "type": "ephemeral"
                     }
-
-                if keep_n_states:
-                    serialized_messages = [
-                        serialized_messages[0]
-                    ] + serialized_messages[1:][-keep_n_states:]
 
                 # Artificially slow things down just a bit because perf with caching makes it easy to hit TPM limits
                 await asyncio.sleep(2)

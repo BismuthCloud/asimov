@@ -7,7 +7,7 @@ import pickle
 import re
 import logging
 import opentelemetry.trace
-from typing import List, Dict, Any, AsyncGenerator, Optional
+from typing import List, Dict, Any, AsyncGenerator, Optional, Sequence
 from typing_extensions import TypedDict
 from pydantic import (
     Field,
@@ -119,7 +119,7 @@ class FlowDecision(AsimovBase):
 
 
 class FlowControlConfig(AsimovBase):
-    decisions: List[FlowDecision]
+    decisions: Sequence[FlowDecision]
     default: Optional[str] = None
     cleanup_on_default: bool = True
 

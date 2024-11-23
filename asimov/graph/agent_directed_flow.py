@@ -1,6 +1,6 @@
 import textwrap
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Sequence
 from pydantic import Field, PrivateAttr, model_validator
 import json
 import asyncio
@@ -38,7 +38,7 @@ class AgentDrivenFlowDecision(FlowDecision):
 
 
 class AgentDrivenFlowControlConfig(FlowControlConfig):
-    decisions: List[AgentDrivenFlowDecision]
+    decisions: Sequence[AgentDrivenFlowDecision]
 
 
 class AgentDirectedFlowControl(FlowControlModule):
