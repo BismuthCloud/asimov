@@ -1,7 +1,7 @@
 import asyncio
 from pydantic import Field
 import json
-from typing import Callable, List, Dict, Any, Tuple
+from typing import Awaitable, Callable, List, Dict, Any, Tuple
 from enum import Enum
 from abc import ABC, abstractmethod
 
@@ -85,6 +85,7 @@ class InferenceClient(ABC):
         temperature=0.5,
         max_iterations=10,
         tool_choice="any",
+        middlewares: List[Callable[[dict[str, Any]], Awaitable[None]]] = [],
     ):
         pass
 
@@ -153,6 +154,7 @@ class BedrockInferenceClient(InferenceClient):
         temperature=0.5,
         max_iterations=10,
         tool_choice="any",
+        middlewares: List[Callable[[dict[str, Any]], Awaitable[None]]] = [],
     ):
         tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
@@ -185,27 +187,103 @@ class BedrockInferenceClient(InferenceClient):
                     tool_choice={"type": tool_choice},
                 )
 
-                response = await client.invoke_model(
+                response = await client.invoke_model_with_response_stream(
                     body=request.model_dump_json(),
                     modelId=self.model,
                     contentType="application/json",
                     accept="application/json",
                 )
 
-                body: dict = json.loads(await response["body"].read())
+                current_content = []
+                current_block: dict[str, Any] = {
+                    "type": None,
+                    "text": "",
+                    "tool_use": None,
+                }
+                current_json = ""
 
-                self._account_input_tokens(body["usage"]["input_tokens"])
-                self._account_output_tokens(body["usage"]["output_tokens"])
+                async for chunk in response["body"]:
+                    chunk_json = json.loads(chunk["chunk"]["bytes"].decode())
+                    chunk_type = chunk_json["type"]
+
+                    if chunk_type == "message_start":
+                        self._account_input_tokens(
+                            chunk_json["message"]["usage"]["input_tokens"]
+                        )
+                    elif chunk_type == "content_block_start":
+                        if current_block["type"] is not None:
+                            if current_block["type"] == "text":
+                                current_content.append(
+                                    {
+                                        "type": "text",
+                                        "text": current_block["text"],
+                                    }
+                                )
+                            elif current_block["type"] == "tool_use":
+                                current_content.append(current_block["tool_use"])
+
+                        block_type = chunk_json["content_block"]["type"]
+                        current_block = {
+                            "type": block_type,
+                            "text": "",
+                            "tool_use": None,
+                        }
+                        if block_type == "tool_use":
+                            current_block["tool_use"] = {
+                                "type": "tool_use",
+                                "id": chunk_json["content_block"]["id"],
+                                "name": chunk_json["content_block"]["name"],
+                                "input": {},
+                            }
+                            current_json = ""
+                    elif chunk_type == "content_block_delta":
+                        if chunk_json["delta"]["type"] == "text_delta":
+                            current_block["text"] += chunk_json["delta"]["text"]
+                            for middleware in middlewares:
+                                await middleware(current_block)
+                        elif chunk_json["delta"]["type"] == "input_json_delta":
+                            current_json += chunk_json["delta"]["partial_json"]
+                            try:
+                                current_block["tool_use"]["input"] = (
+                                    pydantic_core.from_json(
+                                        current_json, allow_partial=True
+                                    )
+                                )
+                                for middleware in middlewares:
+                                    await middleware(current_block)
+                            except ValueError:
+                                pass
+                    elif chunk_type == "content_block_stop":
+                        if current_block["type"] == "text":
+                            current_content.append(
+                                {
+                                    "type": "text",
+                                    "text": current_block["text"],
+                                }
+                            )
+                        elif current_block["type"] == "tool_use":
+                            current_content.append(current_block["tool_use"])
+                        current_block = {
+                            "type": None,
+                            "text": "",
+                            "tool_use": None,
+                        }
+                    elif chunk_type == "message_delta":
+                        if chunk_json["delta"].get("stop_reason") == "tool_use":
+                            self._account_output_tokens(
+                                chunk_json["usage"]["output_tokens"]
+                            )
+                            break
 
                 serialized_messages.append(
                     {
                         "role": "assistant",
-                        "content": body["content"],
+                        "content": current_content,
                     }
                 )
 
                 call = next(
-                    (c for c in body["content"] if c["type"] == "tool_use"), None
+                    (c for c in current_content if c["type"] == "tool_use"), None
                 )
                 if not call:
                     return serialized_messages
@@ -283,18 +361,6 @@ class BedrockInferenceClient(InferenceClient):
                 elif chunk_type == "message_start":
                     self._account_input_tokens(
                         chunk_json["message"]["usage"]["input_tokens"]
-                        + chunk_json["message"]["usage"].get(
-                            "cache_read_input_tokens", 0
-                        )
-                        + chunk_json["message"]["usage"].get(
-                            "cache_creation_input_tokens", 0
-                        ),
-                    )
-                    opentelemetry.trace.get_current_span().set_attribute(
-                        "inference.usage.cached_input_tokens",
-                        chunk_json["message"]["usage"].get(
-                            "cache_read_input_tokens", 0
-                        ),
                     )
                 elif chunk_type == "message_delta":
                     self._account_output_tokens(chunk_json["usage"]["output_tokens"])
@@ -477,7 +543,10 @@ class AnthropicInferenceClient(InferenceClient):
         temperature=0.5,
         max_iterations=10,
         tool_choice="any",
+        middlewares: List[Callable[[dict[str, Any]], Awaitable[None]]] = [],
     ):
+        tools[-1][1]["cache_control"] = {"type": "ephemeral"}
+
         tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
         system = None
@@ -593,6 +662,8 @@ class AnthropicInferenceClient(InferenceClient):
                                         current_block["text"] += chunk_json["delta"][
                                             "text"
                                         ]
+                                        for middleware in middlewares:
+                                            await middleware(current_block)
                                     elif (
                                         chunk_json["delta"]["type"]
                                         == "input_json_delta"
@@ -606,6 +677,8 @@ class AnthropicInferenceClient(InferenceClient):
                                                     current_json, allow_partial=True
                                                 )
                                             )
+                                            for middleware in middlewares:
+                                                await middleware(current_block)
                                         except ValueError:
                                             pass
                                 elif chunk_type == "content_block_stop":
