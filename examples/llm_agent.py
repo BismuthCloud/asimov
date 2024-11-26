@@ -1,11 +1,11 @@
 """
-Cartoon Writing LLM Agent Example
+Cake Baking LLM Agent Example
 
 This example demonstrates how to create an agent that uses Large Language Models (LLMs)
-for writing cartoon episodes. The agent will:
-1. Use an LLM to plan the cartoon episode creation process
-2. Execute the plan by developing characters and story elements
-3. Use flow control to manage the creative process and validate the output
+for baking a cake. The agent will:
+1. Use an LLM to plan the cake baking process
+2. Execute the plan by following recipe steps and monitoring progress
+3. Use flow control to manage the baking process and validate the results
 """
 
 import json
@@ -35,7 +35,7 @@ from uuid import uuid4
 
 
 class LLMPlannerModule(AgentModule):
-    """Uses LLM to plan cartoon episode creation."""
+    """Uses LLM to plan cake baking process."""
 
     name: str = "llm_planner"
     type: ModuleType = ModuleType.EXECUTOR
@@ -99,7 +99,7 @@ class LLMPlannerModule(AgentModule):
 
 
 class LLMExecutorModule(AgentModule):
-    """Executes cartoon creation steps using LLM guidance."""
+    """Executes cake baking steps using LLM guidance."""
 
     name: str = "llm_executor"
     type: ModuleType = ModuleType.EXECUTOR
@@ -219,7 +219,7 @@ class LLMExecutorModule(AgentModule):
 
 
 class LLMFlowControlModule(AgentModule):
-    """Makes decisions about cartoon creation flow based on LLM analysis."""
+    """Makes decisions about cake baking flow based on LLM analysis."""
 
     name: str = "llm_flow_control"
     type: ModuleType = ModuleType.FLOW_CONTROL
@@ -347,17 +347,17 @@ async def main():
 
     # Create and run a task
     task = Task(
-        type="content_creation",
-        objective="Write a blog post about AI agents",
+        type="cake_baking",
+        objective="Bake a chocolate cake",
         params={
-            "topic": "AI Agents in Production",
-            "length": "1000 words",
-            "style": "technical but accessible",
-            "key_points": [
-                "Definition of AI agents",
-                "Common architectures",
-                "Real-world applications",
-                "Future trends",
+            "cake_type": "Chocolate",
+            "servings": "8-10",
+            "difficulty": "intermediate",
+            "requirements": [
+                "Moist and fluffy texture",
+                "Rich chocolate flavor",
+                "Professional presentation",
+                "Even baking throughout",
             ],
         },
     )

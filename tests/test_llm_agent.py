@@ -55,10 +55,10 @@ def mock_cache():
 def mock_anthropic_client():
     return MockAnthropicClient(
         {
-            "Create a step-by-step plan": '{"steps": [{"description": "Develop cartoon characters", "requirements": "Character design guidelines", "validation": "Character profiles with personalities and visual descriptions"}, {"description": "Create story outline", "requirements": "Character profiles", "validation": "Complete episode outline with plot points"}]}',
-            "Execute this step": "Step executed successfully with the following results:\n1. Actions: Created main character profiles\n2. Outcome: Developed 3 unique cartoon characters\n3. Output: Character sheets with personalities and visual descriptions",
-            "Evaluate if the step": "success - characters are well-defined with distinct traits",
-            "Analyze the execution history": "Analysis complete. Decision: continue - character development is on track",
+            "Create a step-by-step plan": '{"steps": [{"description": "Gather ingredients and equipment", "requirements": "Recipe ingredients list and tools", "validation": "All ingredients and tools are present and measured"}, {"description": "Prepare cake batter", "requirements": "Ingredients and mixing equipment", "validation": "Batter has proper consistency and ingredients are well combined"}]}',
+            "Execute this step": "Step executed successfully with the following results:\n1. Actions: Gathered and measured all ingredients\n2. Outcome: All ingredients and tools ready for baking\n3. Output: Ingredients measured and organized according to recipe",
+            "Evaluate if the step": "success - all ingredients are properly measured and equipment is ready",
+            "Analyze the execution history": "Analysis complete. Decision: continue - ingredient preparation is complete and accurate",
         }
     )
 
@@ -123,9 +123,9 @@ async def test_llm_agent_initialization(llm_agent):
 async def test_llm_planning(llm_agent, mock_cache):
     """Test the LLM-based planning functionality."""
     task = Task(
-        type="content_creation",
-        objective="Create a cartoon episode",
-        params={"genre": "Comedy", "duration": "11 minutes"},
+        type="cake_baking",
+        objective="Bake a chocolate cake",
+        params={"cake_type": "Chocolate", "servings": "8-10", "difficulty": "intermediate"},
     )
 
     await mock_cache.set("task", task)
@@ -154,16 +154,16 @@ async def test_llm_execution(llm_agent, mock_cache):
     """Test the LLM-based execution functionality."""
     # Setup test data
     task = Task(
-        type="content_creation",
-        objective="Create a cartoon episode",
-        params={"genre": "Comedy", "duration": "11 minutes"},
+        type="cake_baking",
+        objective="Bake a chocolate cake",
+        params={"cake_type": "Chocolate", "servings": "8-10", "difficulty": "intermediate"},
     )
     plan = json.dumps(
         [
             {
-                "description": "Develop cartoon characters",
-                "requirements": "Character design guidelines",
-                "validation": "Character profiles with personalities and visual descriptions",
+                "description": "Gather ingredients and equipment",
+                "requirements": "Recipe ingredients list and tools",
+                "validation": "All ingredients and tools are present and measured",
             }
         ]
     )
@@ -198,21 +198,22 @@ async def test_llm_execution(llm_agent, mock_cache):
     assert "status" in history_entry
     assert "timestamp" in history_entry
     assert history_entry["status"] == "success"
-    assert history_entry["step"] == "Develop cartoon characters"
+    assert history_entry["step"] == "Gather ingredients and equipment"
 
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(30)  # 30 second timeout
 async def test_end_to_end_processing(llm_agent, mock_cache):
     print("Starting end-to-end LLM agent test")
-    """Test complete end-to-end content creation process."""
+    """Test complete end-to-end cake baking process."""
     task = Task(
-        type="content_creation",
-        objective="Create a cartoon episode",
+        type="cake_baking",
+        objective="Bake a chocolate cake",
         params={
-            "genre": "Comedy",
-            "duration": "11 minutes",
-            "style": "family-friendly animation",
+            "cake_type": "Chocolate",
+            "servings": "8-10",
+            "difficulty": "intermediate",
+            "style": "classic recipe",
         },
     )
 
@@ -280,9 +281,9 @@ async def test_error_handling(llm_agent, mock_cache):
     llm_agent.nodes["executor"].modules[0].client = error_client
 
     task = Task(
-        type="content_creation",
-        objective="Write a blog post",
-        params={"topic": "Error Handling"},
+        type="cake_baking",
+        objective="Bake a chocolate cake",
+        params={"cake_type": "Chocolate", "servings": "8-10", "difficulty": "intermediate"},
     )
 
     # Run the task and expect it to handle errors gracefully
