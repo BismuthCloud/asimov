@@ -5,3 +5,4 @@ __pycache__/*
 .torb_buildstate/*
 dist/*
 venv/*
+.venv/*
