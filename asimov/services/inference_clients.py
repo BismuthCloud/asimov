@@ -886,6 +886,30 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                     }
                 )
             else:
+                tc = next(
+                    (
+                        content
+                        for content in message["content"]
+                        if content["type"] == "tool_use"
+                    ),
+                    None,
+                )
+                if tc:
+                    # OpenRouter hangs if there is message content here?
+                    message = {
+                        "role": message["role"],
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tc["name"],
+                                    "arguments": json.dumps(tc["input"]),
+                                },
+                            }
+                        ],
+                    }
                 openrouter_messages.append(message)
 
         openrouter_tools = []
@@ -964,10 +988,10 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                                             allow_partial=True,
                                         )
                                     )
+                                    for middleware in middlewares:
+                                        await middleware(tool_call_blocks[tc["index"]])
                                 except ValueError:
                                     pass
-                                for middleware in middlewares:
-                                    await middleware(tool_call_blocks[tc["index"]])
                         if data.get("usage"):
                             self._account_input_tokens(data["usage"]["prompt_tokens"])
                             self._account_output_tokens(
