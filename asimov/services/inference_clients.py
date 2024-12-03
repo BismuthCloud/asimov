@@ -80,7 +80,7 @@ class InferenceClient(ABC):
         self,
         serialized_messages: List[Dict[str, Any]],
         tools: List[Tuple[Callable, Dict[str, Any]]],
-        system: Optional[Dict[str, Any]] = None,
+        system: Optional[str] = None,
         max_tokens=8192,
         top_p=0.5,
         temperature=0.5,
@@ -140,6 +140,7 @@ class InferenceClient(ABC):
             call = next((c for c in resp if c["type"] == "tool_use"), None)
 
             if not call:
+                print("no call, returning", resp)
                 return serialized_messages
 
             try:
@@ -269,8 +270,6 @@ class BedrockInferenceClient(InferenceClient):
             current_content = []
             current_block: dict[str, Any] = {
                 "type": None,
-                "text": "",
-                "tool_use": None,
             }
             current_json = ""
 
@@ -283,24 +282,13 @@ class BedrockInferenceClient(InferenceClient):
                         chunk_json["message"]["usage"]["input_tokens"]
                     )
                 elif chunk_type == "content_block_start":
-                    if current_block["type"] is not None:
-                        if current_block["type"] == "text":
-                            current_content.append(
-                                {
-                                    "type": "text",
-                                    "text": current_block["text"],
-                                }
-                            )
-                        elif current_block["type"] == "tool_use":
-                            current_content.append(current_block["tool_use"])
-
                     block_type = chunk_json["content_block"]["type"]
-                    current_block = {
-                        "type": block_type,
-                        "text": "",
-                        "tool_use": None,
-                    }
-                    if block_type == "tool_use":
+                    if block_type == "text":
+                        current_block = {
+                            "type": "text",
+                            "text": "",
+                        }
+                    elif block_type == "tool_use":
                         current_block["tool_use"] = {
                             "type": "tool_use",
                             "id": chunk_json["content_block"]["id"],
@@ -316,29 +304,18 @@ class BedrockInferenceClient(InferenceClient):
                     elif chunk_json["delta"]["type"] == "input_json_delta":
                         current_json += chunk_json["delta"]["partial_json"]
                         try:
-                            current_block["tool_use"]["input"] = (
-                                pydantic_core.from_json(
-                                    current_json, allow_partial=True
-                                )
+                            current_block["input"] = pydantic_core.from_json(
+                                current_json, allow_partial=True
                             )
                             for middleware in middlewares:
                                 await middleware(current_block)
                         except ValueError:
                             pass
                 elif chunk_type == "content_block_stop":
-                    if current_block["type"] == "text":
-                        current_content.append(
-                            {
-                                "type": "text",
-                                "text": current_block["text"],
-                            }
-                        )
-                    elif current_block["type"] == "tool_use":
-                        current_content.append(current_block["tool_use"])
+                    current_content.append(current_block)
+
                     current_block = {
                         "type": None,
-                        "text": "",
-                        "tool_use": None,
                     }
                 elif chunk_type == "message_delta":
                     if chunk_json["delta"].get("stop_reason") == "tool_use":
@@ -610,8 +587,6 @@ class AnthropicInferenceClient(InferenceClient):
         current_content = []
         current_block: dict[str, Any] = {
             "type": None,
-            "text": "",
-            "tool_use": None,
         }
         current_json = ""
 
@@ -653,27 +628,14 @@ class AnthropicInferenceClient(InferenceClient):
                                     ),
                                 )
                             elif chunk_type == "content_block_start":
-                                if current_block["type"] is not None:
-                                    if current_block["type"] == "text":
-                                        current_content.append(
-                                            {
-                                                "type": "text",
-                                                "text": current_block["text"],
-                                            }
-                                        )
-                                    elif current_block["type"] == "tool_use":
-                                        current_content.append(
-                                            current_block["tool_use"]
-                                        )
-
                                 block_type = chunk_json["content_block"]["type"]
-                                current_block = {
-                                    "type": block_type,
-                                    "text": "",
-                                    "tool_use": None,
-                                }
-                                if block_type == "tool_use":
-                                    current_block["tool_use"] = {
+                                if block_type == "text":
+                                    current_block = {
+                                        "type": "text",
+                                        "text": "",
+                                    }
+                                elif block_type == "tool_use":
+                                    current_block = {
                                         "type": "tool_use",
                                         "id": chunk_json["content_block"]["id"],
                                         "name": chunk_json["content_block"]["name"],
@@ -688,7 +650,7 @@ class AnthropicInferenceClient(InferenceClient):
                                 elif chunk_json["delta"]["type"] == "input_json_delta":
                                     current_json += chunk_json["delta"]["partial_json"]
                                     try:
-                                        current_block["tool_use"]["input"] = (
+                                        current_block["input"] = (
                                             pydantic_core.from_json(
                                                 current_json, allow_partial=True
                                             )
@@ -698,19 +660,10 @@ class AnthropicInferenceClient(InferenceClient):
                                     except ValueError:
                                         pass
                             elif chunk_type == "content_block_stop":
-                                if current_block["type"] == "text":
-                                    current_content.append(
-                                        {
-                                            "type": "text",
-                                            "text": current_block["text"],
-                                        }
-                                    )
-                                elif current_block["type"] == "tool_use":
-                                    current_content.append(current_block["tool_use"])
+                                current_content.append(current_block)
+
                                 current_block = {
                                     "type": None,
-                                    "text": "",
-                                    "tool_use": None,
                                 }
                             elif chunk_type == "message_delta":
                                 if chunk_json["delta"].get("stop_reason") == "tool_use":
@@ -765,7 +718,13 @@ class OAIInferenceClient(InferenceClient):
         else:
             request = OAIRequest(
                 model=self.model,
-                messages=[m.model_dump(exclude={"cache_marker"}) for m in messages],
+                messages=[
+                    {
+                        "role": m.role.value,
+                        "content": m.content,
+                    }
+                    for m in messages
+                ],
                 max_tokens=max_tokens,
                 top_p=top_p,
                 temperature=temperature,
@@ -802,7 +761,13 @@ class OAIInferenceClient(InferenceClient):
     ):
         request = OAIRequest(
             model=self.model,
-            messages=[msg.model_dump(exclude={"cache_marker"}) for msg in messages],
+            messages=[
+                {
+                    "role": msg.role.value,
+                    "content": msg.content,
+                }
+                for msg in messages
+            ],
             max_tokens=max_tokens,
             top_p=top_p,
             temperature=temperature,
@@ -866,10 +831,12 @@ class OpenRouterInferenceClient(OAIInferenceClient):
         middlewares=[],
     ):
         if system:
-            serialized_messages = {
-                "role": "system",
-                "content": [{"type": "text", "text": system}],
-            } + serialized_messages
+            serialized_messages = [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": system}],
+                }
+            ] + serialized_messages
 
         openrouter_messages = []
         for message in serialized_messages:
