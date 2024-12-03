@@ -604,6 +604,8 @@ class AnthropicInferenceClient(InferenceClient):
                             "anthropic-beta": "prompt-caching-2024-07-31",
                         },
                     ) as response:
+                        response.raise_for_status()
+
                         async for line in response.aiter_lines():
                             if not line.startswith("data: "):
                                 continue
@@ -671,12 +673,35 @@ class AnthropicInferenceClient(InferenceClient):
                                         chunk_json["usage"]["output_tokens"]
                                     )
                                     break
+                            elif chunk_type == "error":
+                                if chunk_json["error"]["type"] == "overloaded_error":
+                                    raise httpx.HTTPStatusError(
+                                        message="Stream message sent overloaded!",
+                                        request=httpx.Request(
+                                            "GET", "https://dummy_request.com"
+                                        ),
+                                        response=httpx.Response(status_code=529),
+                                    )
+
                     return current_content
                 except httpx.HTTPStatusError as e:
                     if e.response.status_code == 429:
                         print("429 backoff")
                         await asyncio.sleep(3**retry)
                         continue
+
+                    if e.response.status_code == 529:
+                        print("529 overloaded")
+                        await asyncio.sleep(3**retry)
+                        continue
+
+                    if (
+                        e.response.status_code == 400
+                        and b"prompt too long" in await e.response.aread()
+                    ):
+                        print("Context limit reached, returning")
+                        return serialized_messages
+
                     raise
                 except (httpx.RequestError, httpx.HTTPError) as e:
                     if retry < 4:  # Allow retrying on connection errors
