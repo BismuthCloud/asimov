@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 
 import aioboto3
 import httpx
+import backoff
 import opentelemetry.instrumentation.httpx
 import opentelemetry.trace
 import pydantic_core
@@ -386,6 +387,8 @@ class BedrockInferenceClient(InferenceClient):
                 elif chunk_type == "message_delta":
                     self._account_output_tokens(chunk_json["usage"]["output_tokens"])
 
+def fatal_status(e: httpx.HTTPStatusError) -> bool:
+    return e.response.status_code == 400
 
 class AnthropicInferenceClient(InferenceClient):
     def __init__(
@@ -399,6 +402,7 @@ class AnthropicInferenceClient(InferenceClient):
         self.api_key = api_key
 
     @tracer.start_as_current_span(name="AnthropicInferenceClient.get_generation")
+    @backoff.on_exception(backoff.expo, httpx.HTTPStatusError, max_time=60, giveup=fatal_status)
     async def get_generation(
         self, messages: List[ChatMessage], max_tokens=8192, top_p=0.5, temperature=0.5
     ):
@@ -592,7 +596,6 @@ class AnthropicInferenceClient(InferenceClient):
 
         async with httpx.AsyncClient() as client:
             for retry in range(5):
-                try:
                     async with client.stream(
                         "POST",
                         self.api_url,
@@ -604,110 +607,112 @@ class AnthropicInferenceClient(InferenceClient):
                             "anthropic-beta": "prompt-caching-2024-07-31",
                         },
                     ) as response:
-                        response.raise_for_status()
+                        try:
+                            response.raise_for_status()
 
-                        async for line in response.aiter_lines():
-                            if not line.startswith("data: "):
-                                continue
+                            async for line in response.aiter_lines():
+                                if not line.startswith("data: "):
+                                    continue
 
-                            chunk_json = json.loads(line[6:])
-                            chunk_type = chunk_json["type"]
+                                chunk_json = json.loads(line[6:])
+                                chunk_type = chunk_json["type"]
 
-                            if chunk_type == "message_start":
-                                self._account_input_tokens(
-                                    chunk_json["message"]["usage"]["input_tokens"]
-                                    + chunk_json["message"]["usage"].get(
-                                        "cache_read_input_tokens", 0
-                                    )
-                                    + chunk_json["message"]["usage"].get(
-                                        "cache_creation_input_tokens", 0
-                                    )
-                                )
-                                opentelemetry.trace.get_current_span().set_attribute(
-                                    "inference.usage.cached_input_tokens",
-                                    chunk_json["message"]["usage"].get(
-                                        "cache_read_input_tokens", 0
-                                    ),
-                                )
-                            elif chunk_type == "content_block_start":
-                                block_type = chunk_json["content_block"]["type"]
-                                if block_type == "text":
-                                    current_block = {
-                                        "type": "text",
-                                        "text": "",
-                                    }
-                                elif block_type == "tool_use":
-                                    current_block = {
-                                        "type": "tool_use",
-                                        "id": chunk_json["content_block"]["id"],
-                                        "name": chunk_json["content_block"]["name"],
-                                        "input": {},
-                                    }
-                                    current_json = ""
-                            elif chunk_type == "content_block_delta":
-                                if chunk_json["delta"]["type"] == "text_delta":
-                                    current_block["text"] += chunk_json["delta"]["text"]
-                                    for middleware in middlewares:
-                                        await middleware(current_block)
-                                elif chunk_json["delta"]["type"] == "input_json_delta":
-                                    current_json += chunk_json["delta"]["partial_json"]
-                                    try:
-                                        current_block["input"] = (
-                                            pydantic_core.from_json(
-                                                current_json, allow_partial=True
-                                            )
+                                if chunk_type == "message_start":
+                                    self._account_input_tokens(
+                                        chunk_json["message"]["usage"]["input_tokens"]
+                                        + chunk_json["message"]["usage"].get(
+                                            "cache_read_input_tokens", 0
                                         )
+                                        + chunk_json["message"]["usage"].get(
+                                            "cache_creation_input_tokens", 0
+                                        )
+                                    )
+                                    opentelemetry.trace.get_current_span().set_attribute(
+                                        "inference.usage.cached_input_tokens",
+                                        chunk_json["message"]["usage"].get(
+                                            "cache_read_input_tokens", 0
+                                        ),
+                                    )
+                                elif chunk_type == "content_block_start":
+                                    block_type = chunk_json["content_block"]["type"]
+                                    if block_type == "text":
+                                        current_block = {
+                                            "type": "text",
+                                            "text": "",
+                                        }
+                                    elif block_type == "tool_use":
+                                        current_block = {
+                                            "type": "tool_use",
+                                            "id": chunk_json["content_block"]["id"],
+                                            "name": chunk_json["content_block"]["name"],
+                                            "input": {},
+                                        }
+                                        current_json = ""
+                                elif chunk_type == "content_block_delta":
+                                    if chunk_json["delta"]["type"] == "text_delta":
+                                        current_block["text"] += chunk_json["delta"]["text"]
                                         for middleware in middlewares:
                                             await middleware(current_block)
-                                    except ValueError:
-                                        pass
-                            elif chunk_type == "content_block_stop":
-                                current_content.append(current_block)
+                                    elif chunk_json["delta"]["type"] == "input_json_delta":
+                                        current_json += chunk_json["delta"]["partial_json"]
+                                        try:
+                                            current_block["input"] = (
+                                                pydantic_core.from_json(
+                                                    current_json, allow_partial=True
+                                                )
+                                            )
+                                            for middleware in middlewares:
+                                                await middleware(current_block)
+                                        except ValueError:
+                                            pass
+                                elif chunk_type == "content_block_stop":
+                                    current_content.append(current_block)
 
-                                current_block = {
-                                    "type": None,
-                                }
-                            elif chunk_type == "message_delta":
-                                if chunk_json["delta"].get("stop_reason") == "tool_use":
-                                    self._account_output_tokens(
-                                        chunk_json["usage"]["output_tokens"]
-                                    )
-                                    break
-                            elif chunk_type == "error":
-                                if chunk_json["error"]["type"] == "overloaded_error":
-                                    raise httpx.HTTPStatusError(
-                                        message="Stream message sent overloaded!",
-                                        request=httpx.Request(
-                                            "GET", "https://dummy_request.com"
-                                        ),
-                                        response=httpx.Response(status_code=529),
-                                    )
+                                    current_block = {
+                                        "type": None,
+                                    }
+                                elif chunk_type == "message_delta":
+                                    if chunk_json["delta"].get("stop_reason") == "tool_use":
+                                        self._account_output_tokens(
+                                            chunk_json["usage"]["output_tokens"]
+                                        )
+                                        break
+                                elif chunk_type == "error":
+                                    if chunk_json["error"]["type"] == "overloaded_error":
+                                        raise httpx.HTTPStatusError(
+                                            message="Stream message sent overloaded!",
+                                            request=httpx.Request(
+                                                "GET", "https://dummy_request.com"
+                                            ),
+                                            response=httpx.Response(status_code=529),
+                                        )
 
-                    return current_content
-                except httpx.HTTPStatusError as e:
-                    if e.response.status_code == 429:
-                        print("429 backoff")
-                        await asyncio.sleep(3**retry)
-                        continue
+                            return current_content
+                        except httpx.HTTPStatusError as e:
+                            if e.response.status_code == 429:
+                                print("429 backoff")
+                                await asyncio.sleep(3**retry)
+                                continue
 
-                    if e.response.status_code == 529:
-                        print("529 overloaded")
-                        await asyncio.sleep(3**retry)
-                        continue
+                            if e.response.status_code == 529:
+                                print("529 overloaded")
+                                await asyncio.sleep(3**retry)
+                                continue
 
-                    if (
-                        e.response.status_code == 400
-                        and b"prompt too long" in await e.response.aread()
-                    ):
-                        print("Context limit reached, returning")
-                        return serialized_messages
+                            if (
+                                e.response.status_code == 400
+                                and b"prompt too long" in await e.response.aread()
+                            ):
+                                print("Context limit reached, returning")
+                                return serialized_messages
 
-                    raise
-                except (httpx.RequestError, httpx.HTTPError) as e:
-                    if retry < 4:  # Allow retrying on connection errors
-                        await asyncio.sleep(3**retry)
-                        continue
-                    raise
+                            print("400 msg", await e.response.aread())
+                            raise
+                        except (httpx.RequestError, httpx.HTTPError) as e:
+                            if retry < 4:  # Allow retrying on connection errors
+                                await asyncio.sleep(3**retry)
+                                continue
+                            raise
 
 
 class OAIRequest(AsimovBase):
