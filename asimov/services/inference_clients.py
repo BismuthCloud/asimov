@@ -138,33 +138,37 @@ class InferenceClient(ABC):
                 }
             )
 
-            call = next((c for c in resp if c["type"] == "tool_use"), None)
+            calls = [c for c in resp if c["type"] == "tool_use"]
 
-            if not call:
+            if not calls:
                 print("no call, returning", resp)
                 return serialized_messages
 
-            try:
-                result = await tool_funcs[call["name"]](call["input"])
-            except StopAsyncIteration:
-                return serialized_messages
+            content_blocks = []
+            for call in calls:
+                try:
+                    result = await tool_funcs[call["name"]](call["input"])
+                except StopAsyncIteration:
+                    return serialized_messages
+
+                content_blocks.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": call["id"],
+                        "content": result,
+                    }
+                )
 
             serialized_messages.append(
                 {
                     "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": call["id"],
-                            "content": result,
-                        }
-                    ],
+                    "content": content_blocks,
                 }
             )
 
             if len(serialized_messages) > 5:
-                serialized_messages[-5]["content"][0].pop("cache_control", None)
-                serialized_messages[-1]["content"][0]["cache_control"] = {
+                serialized_messages[-5]["content"][-1].pop("cache_control", None)
+                serialized_messages[-1]["content"][-1]["cache_control"] = {
                     "type": "ephemeral"
                 }
 
@@ -241,7 +245,7 @@ class BedrockInferenceClient(InferenceClient):
         middlewares: List[Callable[[dict[str, Any]], Awaitable[None]]] = [],
     ):
         for msg in serialized_messages:
-            msg["content"][0].pop("cache_control", None)
+            msg["content"][-1].pop("cache_control", None)
         for _, tool in tools:
             tool.pop("cache_control", None)
 
