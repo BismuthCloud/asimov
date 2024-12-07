@@ -114,7 +114,7 @@ class InferenceClient(ABC):
         serialized_messages: list[dict[str, Any]] = [
             {
                 "role": msg.role.value,
-                "content": [{"type": "text", "text": msg.content}],
+                "content": [{"type": "text", "text": msg.content}]
             }
             for msg in messages
         ]
@@ -902,7 +902,11 @@ class OpenRouterInferenceClient(OAIInferenceClient):
             serialized_messages = [
                 {
                     "role": "system",
-                    "content": [{"type": "text", "text": system}],
+                    "content": [{
+                        "type": "text",
+                        "text": system,
+                        "cache_control": {"type": "ephemeral"},
+                    }],
                 }
             ] + serialized_messages
 
@@ -913,27 +917,41 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                 and isinstance(message["content"], list)
                 and message["content"][0]["type"] == "tool_result"
             ):
-                openrouter_messages.append(
+                openrouter_messages.extend(
                     {
                         "role": "tool",
-                        "tool_call_id": message["content"][0]["tool_use_id"],
-                        "content": message["content"][0]["content"],
+                        "tool_call_id": result["tool_use_id"],
+                        # This has to be raw string not a {"type": "text", "text": ...} dict
+                        "content": result["content"],
+                    }
+                    for result in message["content"]
+                )
+                openrouter_messages.append(
+                    {
+                        "role": "user",
+                        "content": [{
+                            "type": "text",
+                            "text": "This is a placeholder message and should be ignored. Continue as if this message did not exist.",
+                        } | ({"cache_control": {"type": "ephemeral"}}
+                            if "cache_control" in message["content"][-1] else {}
+                        )],
                     }
                 )
             else:
-                tc = next(
-                    (
-                        content
+                tool_calls = [
+                    content
+                    for content in message["content"]
+                    if content["type"] == "tool_use"
+                ]
+                if tool_calls:
+                    text = next(
+                        (content
                         for content in message["content"]
-                        if content["type"] == "tool_use"
-                    ),
-                    None,
-                )
-                if tc:
-                    # OpenRouter hangs if there is message content here?
+                        if content["type"] == "text")
+                    , None)
                     message = {
-                        "role": message["role"],
-                        "content": None,
+                        "role": "assistant",
+                        "content": text,
                         "tool_calls": [
                             {
                                 "id": tc["id"],
@@ -943,6 +961,7 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                                     "arguments": json.dumps(tc["input"]),
                                 },
                             }
+                            for tc in tool_calls
                         ],
                     }
                 openrouter_messages.append(message)
