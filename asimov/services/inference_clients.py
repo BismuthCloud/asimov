@@ -13,6 +13,7 @@ import opentelemetry.trace
 import pydantic_core
 import vertexai.generative_models
 import google.api_core.exceptions
+import google.generativeai as genai
 
 from asimov.asimov_base import AsimovBase
 
@@ -566,6 +567,7 @@ class AnthropicInferenceClient(InferenceClient):
                                 chunk_json["usage"]["output_tokens"],
                             )
 
+    @tracer.start_as_current_span(name="AnthropicInferenceClient.tool_chain")
     async def _tool_chain_stream(
         self,
         serialized_messages,
@@ -739,11 +741,14 @@ class AnthropicInferenceClient(InferenceClient):
                             continue
 
                         if e.response.status_code == 400:
-                            if b"prompt too long" in await e.response.aread():
+                            error_body = await e.response.aread()
+                            if b"prompt too long" in error_body:
                                 print("Context limit reached, returning")
                                 return serialized_messages
 
                             print(request)
+
+                            print(error_body)
 
                         raise
                     except (httpx.RequestError, httpx.HTTPError) as e:
@@ -751,6 +756,291 @@ class AnthropicInferenceClient(InferenceClient):
                             await asyncio.sleep(3**retry)
                             continue
                         raise
+
+
+def _proto_to_dict(obj):
+    type_name = str(type(obj).__name__)
+    if hasattr(obj, "DESCRIPTOR"):  # Is protobuf message
+        return {
+            field.name: _proto_to_dict(getattr(obj, field.name))
+            for field in obj.DESCRIPTOR.fields
+        }
+    elif type_name in ("RepeatedComposite", "RepeatedScalarContainer", "list", "tuple"):
+        return [_proto_to_dict(x) for x in obj]
+    elif type_name in ("dict", "MapComposite", "MessageMap"):
+        return {k: _proto_to_dict(v) for k, v in obj.items()}
+    return obj
+
+
+def smart_unescape_code(s: str) -> str:
+    # Common patterns in double-escaped code
+    replacements = {
+        "\\n": "\n",  # Newlines
+        '\\"': '"',  # Quotes
+        "\\'": "'",  # Single quotes
+        "\\\\": "\\",  # Actual backslashes
+        "\\t": "\t",  # Tabs
+    }
+
+    result = s
+    for escaped, unescaped in replacements.items():
+        result = result.replace(escaped, unescaped)
+
+    return result
+
+
+class GoogleGenAIInferenceClient(InferenceClient):
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+    ):
+        genai.configure(api_key=api_key)
+        self.model = model
+
+    async def _tool_chain_stream(
+        self,
+        serialized_messages,
+        tools,
+        max_tokens=8192,
+        top_p=0.5,
+        system=None,
+        temperature=0.5,
+        tool_choice="any",
+        middlewares=[],
+    ):
+        def convert_type_keys(schema):
+            if not isinstance(schema, dict):
+                return schema
+
+            converted = {}
+            for key, value in schema.items():
+                if key == "type":
+                    # Convert type value to uppercase and change key to type_
+                    converted["type_"] = value.upper()
+                elif key == "properties":
+                    # Recursively convert nested property schemas
+                    converted[key] = {k: convert_type_keys(v) for k, v in value.items()}
+                else:
+                    # Recursively convert any other nested dictionaries
+                    converted[key] = (
+                        convert_type_keys(value) if isinstance(value, dict) else value
+                    )
+
+            if schema.get("type") == "OBJECT" and not schema.get("required"):
+                schema["required"] = []
+
+            return converted
+
+        # Main tool processing
+        filtered_tools = []
+        for tool in tools:
+            tool_schema = tool[1].copy()
+            if "cache_control" in tool_schema:
+                del tool_schema["cache_control"]
+
+            # Convert the parameters schema
+            parameters = tool_schema.get("parameters") or tool_schema.get(
+                "input_schema"
+            )
+
+            if parameters:
+                parameters = convert_type_keys(
+                    tool_schema.get("parameters", tool_schema["input_schema"])
+                )
+
+            function_declaration = {
+                "name": tool_schema["name"],
+                "description": tool_schema["description"],
+            }
+
+            if (
+                parameters
+                and parameters["type_"] == "OBJECT"
+                and parameters["properties"] != {}
+                or parameters
+                and parameters["type_"] != "OBJECT"
+            ):
+                function_declaration["parameters"] = parameters
+
+            filtered_tools.append((tool[0], function_declaration))
+
+        # Process messages to match Google's format
+        processed_messages = []
+        for message in serialized_messages:
+            if (
+                message["role"] == "user"
+                and isinstance(message["content"], list)
+                and message["content"][0]["type"] == "tool_result"
+            ):
+                # Handle tool result responses
+                processed_message = genai.protos.Content(
+                    role=message["role"],
+                    parts=[
+                        genai.protos.Part(
+                            function_response=genai.protos.FunctionResponse(
+                                name=message["content"][0]["tool_use_id"],
+                                response={"result": message["content"][0]["content"]},
+                            )
+                        )
+                    ],
+                )
+            else:
+                if isinstance(message["content"], list):
+                    tool_call = next(
+                        (c for c in message["content"] if c["type"] == "tool_use"), None
+                    )
+                    if tool_call:
+                        processed_message = genai.protos.Content(
+                            role=message["role"],
+                            parts=[
+                                genai.protos.Part(
+                                    function_call=genai.protos.FunctionCall(
+                                        name=tool_call["name"],
+                                        args=dict(tool_call["input"]),
+                                    )
+                                )
+                            ],
+                        )
+                    else:
+                        text_content = next(
+                            c["text"] for c in message["content"] if c["type"] == "text"
+                        )
+                        processed_message = genai.protos.Content(
+                            role=message["role"],
+                            parts=[genai.protos.Part(text=text_content)],
+                        )
+
+            processed_messages.append(processed_message)
+
+        tool_config = {"function_calling_config": {"mode": tool_choice}}
+
+        model = genai.GenerativeModel(
+            model_name=self.model,
+            system_instruction=system,
+            tools=[
+                genai.protos.Tool(
+                    function_declarations=[genai.protos.FunctionDeclaration(**t[1])]
+                )
+                for t in filtered_tools
+            ],
+            tool_config=tool_config,
+            generation_config={
+                "max_output_tokens": max_tokens,
+                "top_p": top_p,
+                "temperature": temperature,
+            },
+        )
+        for retry in range(5):
+            try:
+                text_block = None
+                tool_call_blocks = []
+
+                response = await model.generate_content_async(
+                    processed_messages, stream=True
+                )
+
+                # Should be able to handle streaming directly without thread pool
+                async for chunk in response:
+                    if chunk.candidates:
+                        for part in chunk.candidates[0].content.parts:
+                            if function_call := part.function_call:
+                                args_dict = _proto_to_dict(function_call.args)
+                                # Clean up over-escaped strings
+                                if isinstance(args_dict, dict):
+                                    for k, v in args_dict.items():
+                                        if isinstance(v, str):
+                                            args_dict[k] = smart_unescape_code(v)
+
+                                tool_block = {
+                                    "type": "tool_use",
+                                    "id": str(len(tool_call_blocks)),
+                                    "name": function_call.name,
+                                    "input": args_dict,
+                                }
+                                tool_call_blocks.append(tool_block)
+                                for middleware in middlewares:
+                                    await middleware(tool_block)
+                            elif part.text:
+                                if not text_block:
+                                    text_block = {"type": "text", "text": part.text}
+                                else:
+                                    text_block["text"] += part.text
+
+                return ([text_block] if text_block else []) + tool_call_blocks
+
+            except Exception as e:
+                # if retry < 4:
+                #     await asyncio.sleep(3**retry)
+                #     continue
+                raise e
+
+        raise Exception("Max retries exceeded")
+
+    async def get_generation(
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
+    ):
+        system_instruction = None
+
+        if messages[0].role.value == "system":
+            system_instruction = messages[0].content
+            messages = messages[1:]
+        # Convert messages to Google's format
+        processed_messages = [
+            genai.protos.Content(
+                role=msg.role.value, parts=[genai.protos.Part(text=msg.content)]
+            )
+            for msg in messages
+        ]
+
+        model = genai.GenerativeModel(
+            model_name=self.model,
+            system_instruction=system_instruction,
+            generation_config={
+                "max_output_tokens": max_tokens,
+                "top_p": top_p,
+                "temperature": temperature,
+            },
+        )
+
+        response = await model.generate_content_async(processed_messages)
+
+        if not response.candidates:
+            return ""
+
+        return response.text
+
+    async def connect_and_listen(
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
+    ):
+        system_instruction = None
+
+        if messages[0].role.value == "system":
+            system_instruction = messages[0].content
+            messages = messages[1:]
+
+        processed_messages = [
+            genai.protos.Content(
+                role=msg.role.value, parts=[genai.protos.Part(text=msg.content)]
+            )
+            for msg in messages
+        ]
+
+        model = genai.GenerativeModel(
+            model_name=self.model,
+            system_instruction=system_instruction,
+            generation_config={
+                "max_output_tokens": max_tokens,
+                "top_p": top_p,
+                "temperature": temperature,
+            },
+        )
+
+        response = await model.generate_content_async(processed_messages, stream=True)
+
+        async for chunk in response:
+            if chunk.text:
+                yield chunk.text
 
 
 class OAIRequest(AsimovBase):
@@ -761,6 +1051,8 @@ class OAIRequest(AsimovBase):
     top_p: float = 1.0
     stream: bool = False
     stream_options: Dict[str, Any] = {}
+    tools: list[dict] = [{}]
+    tool_choice: str = "none"
 
 
 class OAIInferenceClient(InferenceClient):
@@ -802,7 +1094,7 @@ class OAIInferenceClient(InferenceClient):
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 self.api_url,
-                json=request,
+                json=request.__dict__,
                 timeout=180,
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
@@ -877,6 +1169,195 @@ class OAIInferenceClient(InferenceClient):
                             self._account_output_tokens(
                                 data["usage"]["completion_tokens"]
                             )
+
+    @tracer.start_as_current_span(name="OAIInferenceClient.tool_chain")
+    async def _tool_chain_stream(
+        self,
+        serialized_messages,
+        tools,
+        system=None,
+        max_tokens=8192,
+        top_p=0.5,
+        temperature=0.5,
+        tool_choice="any",
+        middlewares=[],
+    ):
+        def wrap_tool_schema(tool):
+            if "cache_control" in tool[1]:
+                del tool[1]["cache_control"]
+
+            return (tool[0], {"type": "function", "function": tool[1]})
+
+        tools = list(map(wrap_tool_schema, tools))
+
+        processed_messages = []
+
+        for message in serialized_messages:
+            if (
+                message["role"] == "user"
+                and isinstance(message["content"], list)
+                and message["content"][0]["type"] == "tool_result"
+            ):
+                processed_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": message["content"][0]["tool_use_id"],
+                        "content": message["content"][0]["content"],
+                    }
+                )
+            else:
+                tc = next(
+                    (
+                        content
+                        for content in message["content"]
+                        if content["type"] == "tool_use"
+                    ),
+                    None,
+                )
+                if tc:
+                    # OpenRouter hangs if there is message content here?
+                    message = {
+                        "role": message["role"],
+                        "tool_calls": [
+                            {
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tc["name"],
+                                    "arguments": json.dumps(tc["input"]),
+                                },
+                            }
+                        ],
+                    }
+                elif type(message["content"]) == list:
+                    message = {
+                        "role": message["role"],
+                        "content": message["content"][0]["text"],
+                    }
+                processed_messages.append(message)
+
+        import pprint
+
+        pprint.pprint(processed_messages)
+
+        request = OAIRequest(
+            model=self.model,
+            messages=processed_messages,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            temperature=temperature,
+            stream=True,
+            stream_options={"include_usage": True},
+            tools=[x[1] for x in tools],
+            tool_choice=tool_choice,
+        )
+
+        request = request.__dict__
+
+        async with httpx.AsyncClient() as client:
+            for retry in range(5):
+                async with client.stream(
+                    "POST",
+                    self.api_url,
+                    timeout=300000,
+                    json=request,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                ) as response:
+                    try:
+                        response.raise_for_status()
+
+                        text_block = None
+                        tool_call_blocks = []
+
+                        async for line in response.aiter_lines():
+                            if line == "data: [DONE]":
+                                return (
+                                    [text_block] if text_block else []
+                                ) + tool_call_blocks
+                            if line.startswith("data: "):
+                                data = json.loads(line[6:])
+                                if data["choices"]:
+                                    d = data["choices"][0]["delta"]
+                                    if d.get("content"):
+                                        if not text_block:
+                                            text_block = {
+                                                "type": "text",
+                                                "text": d["content"],
+                                            }
+                                        else:
+                                            text_block["text"] += d["content"]
+                                    for tc in d.get("tool_calls", []):
+                                        if "id" in tc:
+                                            tool_call_blocks.append(
+                                                {
+                                                    "type": "tool_use",
+                                                    "id": tc["id"],
+                                                    "name": tc["function"]["name"],
+                                                    "raw_input": "",
+                                                    "input": {},
+                                                }
+                                            )
+                                        tool_call_blocks[int(tc["id"])][
+                                            "raw_input"
+                                        ] += tc["function"]["arguments"]
+                                        try:
+                                            tool_call_blocks[int(tc["id"])]["input"] = (
+                                                pydantic_core.from_json(
+                                                    tool_call_blocks[int(tc["id"])][
+                                                        "raw_input"
+                                                    ],
+                                                    allow_partial=True,
+                                                )
+                                            )
+                                            for middleware in middlewares:
+                                                await middleware(
+                                                    tool_call_blocks[int(tc["id"])]
+                                                )
+                                        except ValueError:
+                                            pass
+                                if data.get("usage"):
+                                    self._account_input_tokens(
+                                        data["usage"]["prompt_tokens"]
+                                    )
+                                    self._account_output_tokens(
+                                        data["usage"]["completion_tokens"]
+                                    )
+
+                    except httpx.HTTPStatusError as e:
+                        if e.response.status_code == 429:
+                            print("429 backoff")
+                            await asyncio.sleep(3**retry)
+                            continue
+
+                        if e.response.status_code == 529:
+                            print("529 overloaded")
+                            await asyncio.sleep(3**retry)
+                            continue
+
+                        if e.response.status_code == 500:
+                            print("500 things are borked on Anthropic's side again.")
+                            await asyncio.sleep(3**retry)
+                            continue
+
+                        if e.response.status_code == 400:
+                            body = await e.response.aread()
+                            print(body)
+                            if b"prompt too long" in body:
+                                print("Context limit reached, returning")
+                                return serialized_messages
+                            import pprint
+
+                            pprint.pprint(request)
+
+                        raise
+                    except (httpx.RequestError, httpx.HTTPError) as e:
+                        if retry < 4:  # Allow retrying on connection errors
+                            await asyncio.sleep(3**retry)
+                            continue
+                        raise
 
 
 class OpenRouterInferenceClient(OAIInferenceClient):
