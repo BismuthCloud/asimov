@@ -113,10 +113,7 @@ class InferenceClient(ABC):
             messages = messages[1:]
 
         serialized_messages: list[dict[str, Any]] = [
-            {
-                "role": msg.role.value,
-                "content": [{"type": "text", "text": msg.content}]
-            }
+            {"role": msg.role.value, "content": [{"type": "text", "text": msg.content}]}
             for msg in messages
         ]
 
@@ -1094,7 +1091,7 @@ class OAIInferenceClient(InferenceClient):
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 self.api_url,
-                json=request.__dict__,
+                json=request,
                 timeout=180,
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
@@ -1383,11 +1380,13 @@ class OpenRouterInferenceClient(OAIInferenceClient):
             serialized_messages = [
                 {
                     "role": "system",
-                    "content": [{
-                        "type": "text",
-                        "text": system,
-                        "cache_control": {"type": "ephemeral"},
-                    }],
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": system,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
                 }
             ] + serialized_messages
 
@@ -1410,12 +1409,17 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                 openrouter_messages.append(
                     {
                         "role": "user",
-                        "content": [{
-                            "type": "text",
-                            "text": "This is a placeholder message and should be ignored. Continue as if this message did not exist.",
-                        } | ({"cache_control": {"type": "ephemeral"}}
-                            if "cache_control" in message["content"][-1] else {}
-                        )],
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "This is a placeholder message and should be ignored. Continue as if this message did not exist.",
+                            }
+                            | (
+                                {"cache_control": {"type": "ephemeral"}}
+                                if "cache_control" in message["content"][-1]
+                                else {}
+                            )
+                        ],
                     }
                 )
             else:
@@ -1426,10 +1430,13 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                 ]
                 if tool_calls:
                     text = next(
-                        (content
-                        for content in message["content"]
-                        if content["type"] == "text")
-                    , None)
+                        (
+                            content
+                            for content in message["content"]
+                            if content["type"] == "text"
+                        ),
+                        None,
+                    )
                     message = {
                         "role": "assistant",
                         "content": text,
