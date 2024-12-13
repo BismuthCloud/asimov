@@ -1,4 +1,5 @@
 import asyncio
+import botocore.exceptions
 from pydantic import Field
 import json
 from typing import Awaitable, Callable, List, Dict, Any, Optional, Tuple
@@ -19,6 +20,24 @@ from asimov.asimov_base import AsimovBase
 
 tracer = opentelemetry.trace.get_tracer(__name__)
 opentelemetry.instrumentation.httpx.HTTPXClientInstrumentor().instrument()
+
+
+class InferenceException(Exception):
+    """
+    A generic exception for inference errors.
+    Should be safe to retry.
+    ValueError is raised if the request is un-retryable (e.g. parameters are malformed, or the request is too large).
+    """
+
+    pass
+
+
+class RetriesExceeded(InferenceException):
+    """
+    Raised when the maximum number of retries is exceeded.
+    """
+
+    pass
 
 
 class ChatRole(Enum):
@@ -118,16 +137,37 @@ class InferenceClient(ABC):
         ]
 
         for _ in range(max_iterations):
-            resp = await self._tool_chain_stream(
-                serialized_messages,
-                tools,
-                system=system,
-                max_tokens=max_tokens,
-                top_p=top_p,
-                temperature=temperature,
-                tool_choice=tool_choice,
-                middlewares=middlewares,
-            )
+            for retry in range(1, 5):
+                try:
+                    resp = await self._tool_chain_stream(
+                        serialized_messages,
+                        tools,
+                        system=system,
+                        max_tokens=max_tokens,
+                        top_p=top_p,
+                        temperature=temperature,
+                        tool_choice=tool_choice,
+                        middlewares=middlewares,
+                    )
+                    break
+                except ValueError as e:
+                    print(f"ValueError hit ({e}), bailing")
+                    return serialized_messages
+                except InferenceException as e:
+                    print("inference exception", e)
+                    await asyncio.sleep(3**retry)
+                    if retry > 3:
+                        # Modify messages to try and cache bust in case we have a poison message or similar
+                        serialized_messages[0]["content"][0][
+                            "text"
+                        ] += "\n\nTFJeD9K6smAnr6sUcllj"
+                    continue
+                except Exception as e:
+                    print("generic inference exception", e)
+                    await asyncio.sleep(3**retry)
+                    continue
+            else:
+                raise RetriesExceeded()
 
             serialized_messages.append(
                 {
@@ -184,6 +224,7 @@ class BedrockInferenceClient(InferenceClient):
         self.anthropic_version = "bedrock-2023-05-31"
 
     @tracer.start_as_current_span(name="BedrockInferenceClient.get_generation")
+    @backoff.on_exception(backoff.expo, InferenceException, max_time=60)
     async def get_generation(
         self,
         messages: List[ChatMessage],
@@ -216,12 +257,17 @@ class BedrockInferenceClient(InferenceClient):
             service_name="bedrock-runtime",
             region_name=self.region_name,
         ) as client:
-            response = await client.invoke_model(
-                body=request.model_dump_json(exclude={"tools", "tool_choice"}),
-                modelId=self.model,
-                contentType="application/json",
-                accept="application/json",
-            )
+            try:
+                response = await client.invoke_model(
+                    body=request.model_dump_json(exclude={"tools", "tool_choice"}),
+                    modelId=self.model,
+                    contentType="application/json",
+                    accept="application/json",
+                )
+            except client.exceptions.ValidationException as e:
+                raise ValueError(str(e))
+            except botocore.exceptions.ClientError as e:
+                raise InferenceException(str(e))
 
             body: dict = json.loads(await response["body"].read())
 
@@ -229,6 +275,69 @@ class BedrockInferenceClient(InferenceClient):
             self._account_output_tokens(body["usage"]["output_tokens"])
 
             return body["content"][0]["text"]
+
+    @tracer.start_as_current_span(name="BedrockInferenceClient.connect_and_listen")
+    async def connect_and_listen(
+        self,
+        messages: List[ChatMessage],
+        max_tokens=8192,
+        top_p=0.5,
+        temperature=0.5,
+    ):
+        system = ""
+        if messages[0].role == ChatRole.SYSTEM:
+            system = messages[0].content
+            messages = messages[1:]
+
+        request = AnthropicRequest(
+            anthropic_version=self.anthropic_version,
+            system=system,
+            top_p=top_p,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            messages=[
+                {
+                    "role": msg.role.value,
+                    "content": [{"type": "text", "text": msg.content}],
+                }
+                for msg in messages
+            ],
+        )
+
+        async with self.session.client(
+            service_name="bedrock-runtime",
+            region_name=self.region_name,
+        ) as client:
+            try:
+                response = await client.invoke_model_with_response_stream(
+                    body=request.model_dump_json(exclude={"tools", "tool_choice"}),
+                    modelId=self.model,
+                    contentType="application/json",
+                    accept="application/json",
+                )
+            except client.exceptions.ValidationException as e:
+                raise ValueError(str(e))
+            except botocore.exceptions.ClientError as e:
+                raise InferenceException(str(e))
+
+            async for chunk in response["body"]:
+                chunk_json = json.loads(chunk["chunk"]["bytes"].decode())
+                chunk_type = chunk_json["type"]
+
+                if chunk_type == "content_block_delta":
+                    content_type = chunk_json["delta"]["type"]
+                    text = (
+                        chunk_json["delta"]["text"]
+                        if content_type == "text_delta"
+                        else ""
+                    )
+                    yield text
+                elif chunk_type == "message_start":
+                    self._account_input_tokens(
+                        chunk_json["message"]["usage"]["input_tokens"]
+                    )
+                elif chunk_type == "message_delta":
+                    self._account_output_tokens(chunk_json["usage"]["output_tokens"])
 
     @tracer.start_as_current_span(name="BedrockInferenceClient.tool_chain")
     async def _tool_chain_stream(
@@ -263,12 +372,17 @@ class BedrockInferenceClient(InferenceClient):
             if system:
                 request["system"] = system
 
-            response = await client.invoke_model_with_response_stream(
-                body=json.dumps(request),
-                modelId=self.model,
-                contentType="application/json",
-                accept="application/json",
-            )
+            try:
+                response = await client.invoke_model_with_response_stream(
+                    body=json.dumps(request),
+                    modelId=self.model,
+                    contentType="application/json",
+                    accept="application/json",
+                )
+            except client.exceptions.ValidationException as e:
+                raise ValueError(str(e))
+            except botocore.exceptions.ClientError as e:
+                raise InferenceException(str(e))
 
             current_content = []
             current_block: dict[str, Any] = {
@@ -329,70 +443,6 @@ class BedrockInferenceClient(InferenceClient):
 
             return current_content
 
-        raise Exception("Max retries exceeded")
-
-    @tracer.start_as_current_span(name="BedrockInferenceClient.connect_and_listen")
-    async def connect_and_listen(
-        self,
-        messages: List[ChatMessage],
-        max_tokens=8192,
-        top_p=0.5,
-        temperature=0.5,
-    ):
-        system = ""
-        if messages[0].role == ChatRole.SYSTEM:
-            system = messages[0].content
-            messages = messages[1:]
-
-        request = AnthropicRequest(
-            anthropic_version=self.anthropic_version,
-            system=system,
-            top_p=top_p,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            messages=[
-                {
-                    "role": msg.role.value,
-                    "content": [{"type": "text", "text": msg.content}],
-                }
-                for msg in messages
-            ],
-        )
-
-        async with self.session.client(
-            service_name="bedrock-runtime",
-            region_name=self.region_name,
-        ) as client:
-            response = await client.invoke_model_with_response_stream(
-                body=request.model_dump_json(exclude={"tools", "tool_choice"}),
-                modelId=self.model,
-                contentType="application/json",
-                accept="application/json",
-            )
-
-            async for chunk in response["body"]:
-                chunk_json = json.loads(chunk["chunk"]["bytes"].decode())
-                chunk_type = chunk_json["type"]
-
-                if chunk_type == "content_block_delta":
-                    content_type = chunk_json["delta"]["type"]
-                    text = (
-                        chunk_json["delta"]["text"]
-                        if content_type == "text_delta"
-                        else ""
-                    )
-                    yield text
-                elif chunk_type == "message_start":
-                    self._account_input_tokens(
-                        chunk_json["message"]["usage"]["input_tokens"]
-                    )
-                elif chunk_type == "message_delta":
-                    self._account_output_tokens(chunk_json["usage"]["output_tokens"])
-
-
-def fatal_status(e: httpx.HTTPStatusError) -> bool:
-    return e.response.status_code == 400
-
 
 class AnthropicInferenceClient(InferenceClient):
     def __init__(
@@ -406,9 +456,7 @@ class AnthropicInferenceClient(InferenceClient):
         self.api_key = api_key
 
     @tracer.start_as_current_span(name="AnthropicInferenceClient.get_generation")
-    @backoff.on_exception(
-        backoff.expo, httpx.HTTPStatusError, max_time=60, giveup=fatal_status
-    )
+    @backoff.on_exception(backoff.expo, InferenceException, max_time=60)
     async def get_generation(
         self, messages: List[ChatMessage], max_tokens=8192, top_p=0.5, temperature=0.5
     ):
@@ -454,9 +502,10 @@ class AnthropicInferenceClient(InferenceClient):
                 },
             )
 
-            if response.status_code != 200:
-                print(await response.aread())
-                response.raise_for_status()
+            if response.status_code == 400:
+                raise ValueError(await response.aread())
+            elif response.status_code != 200:
+                raise InferenceException(await response.aread())
 
             body: dict = response.json()
 
@@ -530,6 +579,11 @@ class AnthropicInferenceClient(InferenceClient):
                     "anthropic-beta": "prompt-caching-2024-07-31",
                 },
             ) as response:
+                if response.status_code == 400:
+                    raise ValueError(await response.aread())
+                elif response.status_code != 200:
+                    raise InferenceException(await response.aread())
+
                 async for line in response.aiter_lines():
                     if line.startswith("data: "):
                         chunk_json = json.loads(line[6:])
@@ -602,157 +656,98 @@ class AnthropicInferenceClient(InferenceClient):
         current_json = ""
 
         async with httpx.AsyncClient() as client:
-            for retry in range(5):
-                async with client.stream(
-                    "POST",
-                    self.api_url,
-                    timeout=300000,
-                    json=request,
-                    headers={
-                        "x-api-key": self.api_key,
-                        "anthropic-version": "2023-06-01",
-                        "anthropic-beta": "prompt-caching-2024-07-31",
-                    },
-                ) as response:
-                    try:
-                        response.raise_for_status()
+            async with client.stream(
+                "POST",
+                self.api_url,
+                timeout=300000,
+                json=request,
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "anthropic-beta": "prompt-caching-2024-07-31",
+                },
+            ) as response:
+                if response.status_code == 400:
+                    raise ValueError(await response.aread())
+                elif response.status_code != 200:
+                    raise InferenceException(await response.aread())
 
-                        async for line in response.aiter_lines():
-                            if not line.startswith("data: "):
-                                continue
+                async for line in response.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
 
-                            chunk_json = json.loads(line[6:])
-                            chunk_type = chunk_json["type"]
+                    chunk_json = json.loads(line[6:])
+                    chunk_type = chunk_json["type"]
 
-                            if chunk_type == "message_start":
-                                self._account_input_tokens(
-                                    chunk_json["message"]["usage"]["input_tokens"]
-                                    + chunk_json["message"]["usage"].get(
-                                        "cache_read_input_tokens", 0
-                                    )
-                                    + chunk_json["message"]["usage"].get(
-                                        "cache_creation_input_tokens", 0
-                                    )
+                    if chunk_type == "message_start":
+                        self._account_input_tokens(
+                            chunk_json["message"]["usage"]["input_tokens"]
+                            + chunk_json["message"]["usage"].get(
+                                "cache_read_input_tokens", 0
+                            )
+                            + chunk_json["message"]["usage"].get(
+                                "cache_creation_input_tokens", 0
+                            )
+                        )
+                        opentelemetry.trace.get_current_span().set_attribute(
+                            "inference.usage.cached_input_tokens",
+                            chunk_json["message"]["usage"].get(
+                                "cache_read_input_tokens", 0
+                            ),
+                        )
+                    elif chunk_type == "content_block_start":
+                        block_type = chunk_json["content_block"]["type"]
+                        if block_type == "text":
+                            current_block = {
+                                "type": "text",
+                                "text": "",
+                            }
+                        elif block_type == "tool_use":
+                            current_block = {
+                                "type": "tool_use",
+                                "id": chunk_json["content_block"]["id"],
+                                "name": chunk_json["content_block"]["name"],
+                                "input": {},
+                            }
+                            current_json = ""
+                    elif chunk_type == "content_block_delta":
+                        if chunk_json["delta"]["type"] == "text_delta":
+                            current_block["text"] += chunk_json["delta"]["text"]
+                            for middleware in middlewares:
+                                await middleware(current_block)
+                        elif chunk_json["delta"]["type"] == "input_json_delta":
+                            current_json += chunk_json["delta"]["partial_json"]
+                            try:
+                                current_block["input"] = pydantic_core.from_json(
+                                    current_json, allow_partial=True
                                 )
-                                opentelemetry.trace.get_current_span().set_attribute(
-                                    "inference.usage.cached_input_tokens",
-                                    chunk_json["message"]["usage"].get(
-                                        "cache_read_input_tokens", 0
-                                    ),
-                                )
-                            elif chunk_type == "content_block_start":
-                                block_type = chunk_json["content_block"]["type"]
-                                if block_type == "text":
-                                    current_block = {
-                                        "type": "text",
-                                        "text": "",
-                                    }
-                                elif block_type == "tool_use":
-                                    current_block = {
-                                        "type": "tool_use",
-                                        "id": chunk_json["content_block"]["id"],
-                                        "name": chunk_json["content_block"]["name"],
-                                        "input": {},
-                                    }
-                                    current_json = ""
-                            elif chunk_type == "content_block_delta":
-                                if chunk_json["delta"]["type"] == "text_delta":
-                                    current_block["text"] += chunk_json["delta"]["text"]
-                                    for middleware in middlewares:
-                                        await middleware(current_block)
-                                elif chunk_json["delta"]["type"] == "input_json_delta":
-                                    current_json += chunk_json["delta"]["partial_json"]
-                                    try:
-                                        current_block["input"] = (
-                                            pydantic_core.from_json(
-                                                current_json, allow_partial=True
-                                            )
-                                        )
-                                        for middleware in middlewares:
-                                            await middleware(current_block)
-                                    except ValueError:
-                                        pass
-                            elif chunk_type == "content_block_stop":
-                                current_content.append(current_block)
-
-                                current_block = {
-                                    "type": None,
-                                }
-                            elif chunk_type == "message_delta":
-                                if chunk_json["delta"].get("stop_reason") == "tool_use":
-                                    self._account_output_tokens(
-                                        chunk_json["usage"]["output_tokens"]
-                                    )
-                                    break
-                            elif chunk_type == "error":
-                                print(chunk_json)
-                                if chunk_json["error"]["type"] == "overloaded_error":
-                                    raise httpx.HTTPStatusError(
-                                        message="Stream message sent overloaded!",
-                                        request=httpx.Request(
-                                            "GET", "https://dummy_request.com"
-                                        ),
-                                        response=httpx.Response(status_code=529),
-                                    )
-                                if chunk_json["error"]["type"] == "api_error":
-                                    raise httpx.HTTPStatusError(
-                                        message="Stream message sent internal server error.",
-                                        request=httpx.Request(
-                                            "GET", "https://dummy_request.com"
-                                        ),
-                                        response=httpx.Response(status_code=500),
-                                    )
-                                if (
-                                    chunk_json["error"]["type"]
-                                    == "invalid_request_error"
-                                ):
-                                    print(chunk_json)
-                                    raise httpx.HTTPStatusError(
-                                        message="Stream message sent 400 with weird tool call error.",
-                                        request=httpx.Request(
-                                            "GET", "https://dummy_request.com"
-                                        ),
-                                        response=httpx.Response(status_code=400),
-                                    )
-                            elif chunk_type == "ping":
+                                for middleware in middlewares:
+                                    await middleware(current_block)
+                            except ValueError:
                                 pass
-                            else:
-                                print("Unknown message type from Anthropic stream.")
-                                print(chunk_json)
+                    elif chunk_type == "content_block_stop":
+                        current_content.append(current_block)
 
-                        return current_content
-                    except httpx.HTTPStatusError as e:
-                        if e.response.status_code == 429:
-                            print("429 backoff")
-                            await asyncio.sleep(3**retry)
-                            continue
+                        current_block = {
+                            "type": None,
+                        }
+                    elif chunk_type == "message_delta":
+                        if chunk_json["delta"].get("stop_reason") == "tool_use":
+                            self._account_output_tokens(
+                                chunk_json["usage"]["output_tokens"]
+                            )
+                            break
+                    elif chunk_type == "error":
+                        if chunk_json["error"]["type"] == "invalid_request_error":
+                            raise ValueError(chunk_json["error"]["type"])
+                        raise InferenceException(chunk_json["error"]["type"])
+                    elif chunk_type == "ping":
+                        pass
+                    else:
+                        print("Unknown message type from Anthropic stream.")
+                        print(chunk_json)
 
-                        if e.response.status_code == 529:
-                            print("529 overloaded")
-                            await asyncio.sleep(3**retry)
-                            continue
-
-                        if e.response.status_code == 500:
-                            print("500 things are borked on Anthropic's side again.")
-                            await asyncio.sleep(3**retry)
-                            continue
-
-                        if e.response.status_code == 400:
-                            error_body = await e.response.aread()
-                            if b"prompt too long" in error_body:
-                                print("Context limit reached, returning")
-                                return serialized_messages
-
-                            print(request)
-
-                            print(error_body)
-
-                        raise
-                    except (httpx.RequestError, httpx.HTTPError) as e:
-                        if retry < 4:  # Allow retrying on connection errors
-                            await asyncio.sleep(3**retry)
-                            continue
-                        raise
+                return current_content
 
 
 def _proto_to_dict(obj):
@@ -928,52 +923,42 @@ class GoogleGenAIInferenceClient(InferenceClient):
                 "temperature": temperature,
             },
         )
-        for retry in range(5):
-            try:
-                text_block = None
-                tool_call_blocks = []
 
-                response = await model.generate_content_async(
-                    processed_messages, stream=True
-                )
+        text_block = None
+        tool_call_blocks = []
 
-                # Should be able to handle streaming directly without thread pool
-                async for chunk in response:
-                    if chunk.candidates:
-                        for part in chunk.candidates[0].content.parts:
-                            if function_call := part.function_call:
-                                args_dict = _proto_to_dict(function_call.args)
-                                # Clean up over-escaped strings
-                                if isinstance(args_dict, dict):
-                                    for k, v in args_dict.items():
-                                        if isinstance(v, str):
-                                            args_dict[k] = smart_unescape_code(v)
+        response = await model.generate_content_async(processed_messages, stream=True)
 
-                                tool_block = {
-                                    "type": "tool_use",
-                                    "id": str(len(tool_call_blocks)),
-                                    "name": function_call.name,
-                                    "input": args_dict,
-                                }
-                                tool_call_blocks.append(tool_block)
-                                for middleware in middlewares:
-                                    await middleware(tool_block)
-                            elif part.text:
-                                if not text_block:
-                                    text_block = {"type": "text", "text": part.text}
-                                else:
-                                    text_block["text"] += part.text
+        # Should be able to handle streaming directly without thread pool
+        async for chunk in response:
+            if chunk.candidates:
+                for part in chunk.candidates[0].content.parts:
+                    if function_call := part.function_call:
+                        args_dict = _proto_to_dict(function_call.args)
+                        # Clean up over-escaped strings
+                        if isinstance(args_dict, dict):
+                            for k, v in args_dict.items():
+                                if isinstance(v, str):
+                                    args_dict[k] = smart_unescape_code(v)
 
-                return ([text_block] if text_block else []) + tool_call_blocks
+                        tool_block = {
+                            "type": "tool_use",
+                            "id": str(len(tool_call_blocks)),
+                            "name": function_call.name,
+                            "input": args_dict,
+                        }
+                        tool_call_blocks.append(tool_block)
+                        for middleware in middlewares:
+                            await middleware(tool_block)
+                    elif part.text:
+                        if not text_block:
+                            text_block = {"type": "text", "text": part.text}
+                        else:
+                            text_block["text"] += part.text
 
-            except Exception as e:
-                # if retry < 4:
-                #     await asyncio.sleep(3**retry)
-                #     continue
-                raise e
+        return ([text_block] if text_block else []) + tool_call_blocks
 
-        raise Exception("Max retries exceeded")
-
+    @backoff.on_exception(backoff.expo, InferenceException, max_time=60)
     async def get_generation(
         self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
     ):
@@ -1064,6 +1049,7 @@ class OAIInferenceClient(InferenceClient):
         self.api_key = api_key
 
     @tracer.start_as_current_span(name="OAIInferenceClient.get_generation")
+    @backoff.on_exception(backoff.expo, InferenceException, max_time=60)
     async def get_generation(
         self, messages: List[ChatMessage], max_tokens=4096, top_p=1.0, temperature=0.5
     ):
@@ -1099,7 +1085,10 @@ class OAIInferenceClient(InferenceClient):
                 },
             )
 
-            response.raise_for_status()
+            if response.status_code == 400:
+                raise ValueError(await response.aread())
+            elif response.status_code != 200:
+                raise InferenceException(await response.aread())
 
             body: dict = response.json()
 
@@ -1143,13 +1132,18 @@ class OAIInferenceClient(InferenceClient):
                 },
                 timeout=180,
             ) as response:
-                response.raise_for_status()
+                if response.status_code == 400:
+                    raise ValueError(await response.aread())
+                elif response.status_code != 200:
+                    raise InferenceException(await response.aread())
 
                 async for line in response.aiter_lines():
                     if line.startswith("data: "):
                         if line.strip() == "data: [DONE]":
                             break
                         data = json.loads(line[6:])
+                        if "error" in data:
+                            raise InferenceException(data["error"]["message"])
                         if data["choices"] and data["choices"][0]["delta"].get(
                             "content"
                         ):
@@ -1233,10 +1227,6 @@ class OAIInferenceClient(InferenceClient):
                     }
                 processed_messages.append(message)
 
-        import pprint
-
-        pprint.pprint(processed_messages)
-
         request = OAIRequest(
             model=self.model,
             messages=processed_messages,
@@ -1252,109 +1242,73 @@ class OAIInferenceClient(InferenceClient):
         request = request.__dict__
 
         async with httpx.AsyncClient() as client:
-            for retry in range(5):
-                async with client.stream(
-                    "POST",
-                    self.api_url,
-                    timeout=300000,
-                    json=request,
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                ) as response:
-                    try:
-                        response.raise_for_status()
+            async with client.stream(
+                "POST",
+                self.api_url,
+                timeout=300000,
+                json=request,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+            ) as response:
+                if response.status_code == 400:
+                    raise ValueError()
+                elif response.status_code != 200:
+                    raise InferenceException(await response.aread())
 
-                        text_block = None
-                        tool_call_blocks = []
+                text_block = None
+                tool_call_blocks = []
 
-                        async for line in response.aiter_lines():
-                            if line == "data: [DONE]":
-                                return (
-                                    [text_block] if text_block else []
-                                ) + tool_call_blocks
-                            if line.startswith("data: "):
-                                data = json.loads(line[6:])
-                                if data["choices"]:
-                                    d = data["choices"][0]["delta"]
-                                    if d.get("content"):
-                                        if not text_block:
-                                            text_block = {
-                                                "type": "text",
-                                                "text": d["content"],
-                                            }
-                                        else:
-                                            text_block["text"] += d["content"]
-                                    for tc in d.get("tool_calls", []):
-                                        if "id" in tc:
-                                            tool_call_blocks.append(
-                                                {
-                                                    "type": "tool_use",
-                                                    "id": tc["id"],
-                                                    "name": tc["function"]["name"],
-                                                    "raw_input": "",
-                                                    "input": {},
-                                                }
-                                            )
-                                        tool_call_blocks[int(tc["id"])][
-                                            "raw_input"
-                                        ] += tc["function"]["arguments"]
-                                        try:
-                                            tool_call_blocks[int(tc["id"])]["input"] = (
-                                                pydantic_core.from_json(
-                                                    tool_call_blocks[int(tc["id"])][
-                                                        "raw_input"
-                                                    ],
-                                                    allow_partial=True,
-                                                )
-                                            )
-                                            for middleware in middlewares:
-                                                await middleware(
-                                                    tool_call_blocks[int(tc["id"])]
-                                                )
-                                        except ValueError:
-                                            pass
-                                if data.get("usage"):
-                                    self._account_input_tokens(
-                                        data["usage"]["prompt_tokens"]
+                async for line in response.aiter_lines():
+                    if line == "data: [DONE]":
+                        return ([text_block] if text_block else []) + tool_call_blocks
+                    if line.startswith("data: "):
+                        data = json.loads(line[6:])
+                        if data["choices"]:
+                            d = data["choices"][0]["delta"]
+                            if d.get("content"):
+                                if not text_block:
+                                    text_block = {
+                                        "type": "text",
+                                        "text": d["content"],
+                                    }
+                                else:
+                                    text_block["text"] += d["content"]
+                            for tc in d.get("tool_calls", []):
+                                if "id" in tc:
+                                    tool_call_blocks.append(
+                                        {
+                                            "type": "tool_use",
+                                            "id": tc["id"],
+                                            "name": tc["function"]["name"],
+                                            "raw_input": "",
+                                            "input": {},
+                                        }
                                     )
-                                    self._account_output_tokens(
-                                        data["usage"]["completion_tokens"]
+                                tool_call_blocks[int(tc["id"])]["raw_input"] += tc[
+                                    "function"
+                                ]["arguments"]
+                                try:
+                                    tool_call_blocks[int(tc["id"])]["input"] = (
+                                        pydantic_core.from_json(
+                                            tool_call_blocks[int(tc["id"])][
+                                                "raw_input"
+                                            ],
+                                            allow_partial=True,
+                                        )
                                     )
-
-                    except httpx.HTTPStatusError as e:
-                        if e.response.status_code == 429:
-                            print("429 backoff")
-                            await asyncio.sleep(3**retry)
-                            continue
-
-                        if e.response.status_code == 529:
-                            print("529 overloaded")
-                            await asyncio.sleep(3**retry)
-                            continue
-
-                        if e.response.status_code == 500:
-                            print("500 things are borked on Anthropic's side again.")
-                            await asyncio.sleep(3**retry)
-                            continue
-
-                        if e.response.status_code == 400:
-                            body = await e.response.aread()
-                            print(body)
-                            if b"prompt too long" in body:
-                                print("Context limit reached, returning")
-                                return serialized_messages
-                            import pprint
-
-                            pprint.pprint(request)
-
-                        raise
-                    except (httpx.RequestError, httpx.HTTPError) as e:
-                        if retry < 4:  # Allow retrying on connection errors
-                            await asyncio.sleep(3**retry)
-                            continue
-                        raise
+                                    for middleware in middlewares:
+                                        await middleware(
+                                            tool_call_blocks[int(tc["id"])]
+                                        )
+                                except ValueError:
+                                    pass
+                        if data.get("usage"):
+                            self._account_input_tokens(data["usage"]["prompt_tokens"])
+                            self._account_output_tokens(
+                                data["usage"]["completion_tokens"]
+                            )
 
 
 class OpenRouterInferenceClient(OAIInferenceClient):
@@ -1412,7 +1366,7 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                         "content": [
                             {
                                 "type": "text",
-                                "text": "This is a placeholder message and should be ignored. Continue as if this message did not exist.",
+                                "text": "2OlhsiUTobMgfLbuuyPv",  # placeholder
                             }
                             | (
                                 {"cache_control": {"type": "ephemeral"}}
@@ -1489,7 +1443,10 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                 },
                 timeout=180,
             ) as response:
-                response.raise_for_status()
+                if response.status_code == 400:
+                    raise ValueError()
+                elif response.status_code != 200:
+                    raise InferenceException(await response.aread())
 
                 text_block = None
                 tool_call_blocks = []
@@ -1499,6 +1456,8 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                         return ([text_block] if text_block else []) + tool_call_blocks
                     if line.startswith("data: "):
                         data = json.loads(line[6:])
+                        if data.get("error"):
+                            raise InferenceException(data["error"]["message"])
                         if data["choices"]:
                             d = data["choices"][0]["delta"]
                             if d.get("content"):
@@ -1546,6 +1505,7 @@ class VertexInferenceClient(InferenceClient):
         self.model = model
 
     @tracer.start_as_current_span(name="VertexInferenceClient.get_generation")
+    @backoff.on_exception(backoff.expo, InferenceException, max_time=60)
     async def get_generation(
         self,
         messages: List[ChatMessage],
@@ -1567,34 +1527,31 @@ class VertexInferenceClient(InferenceClient):
             prefill = messages[-1].content
             messages = messages[:-1]
 
-        for retry in range(4):
-            try:
-                resp = await model.generate_content_async(
-                    [
-                        vertexai.generative_models.Content(
-                            role=msg.role.value,
-                            parts=[
-                                vertexai.generative_models.Part.from_text(msg.content)
-                            ],
-                        )
-                        for msg in messages
-                    ],
-                    generation_config=vertexai.generative_models.GenerationConfig(
-                        max_output_tokens=max_tokens,
-                        top_p=top_p,
-                        temperature=temperature,
-                        response_mime_type="application/json" if schema else None,
-                        response_schema=schema,
-                    ),
-                )
-                if schema:
-                    resp.text = resp.text[len(prefill) :]
-                break
-            except google.api_core.exceptions.ResourceExhausted:
-                print("backoff retry")
-                await asyncio.sleep(2**retry)
-        else:
-            raise
+        try:
+            resp = await model.generate_content_async(
+                [
+                    vertexai.generative_models.Content(
+                        role=msg.role.value,
+                        parts=[vertexai.generative_models.Part.from_text(msg.content)],
+                    )
+                    for msg in messages
+                ],
+                generation_config=vertexai.generative_models.GenerationConfig(
+                    max_output_tokens=max_tokens,
+                    top_p=top_p,
+                    temperature=temperature,
+                    response_mime_type="application/json" if schema else None,
+                    response_schema=schema,
+                ),
+            )
+            if schema:
+                resp.text = resp.text[len(prefill) :]
+        except google.api_core.exceptions.TooManyRequests:
+            raise InferenceException("backoff")
+        except google.api_core.exceptions.BadRequest:
+            raise ValueError()
+        except google.api_core.exceptions.ServerError:
+            raise InferenceException("server_error")
 
         self._account_input_tokens(resp.usage_metadata.prompt_token_count)
         self._account_output_tokens(resp.usage_metadata.candidates_token_count)
