@@ -974,7 +974,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
         tool_config = {"function_calling_config": {"mode": tool_choice.upper()}}
 
         if self.model == "gemini-2.0-flash-exp":
-            asyncio.sleep(6.5)
+            await asyncio.sleep(6.5)
 
         request = self.client.aio.models.generate_content_stream(
             model=self.model,
@@ -985,9 +985,9 @@ class GoogleGenAIInferenceClient(InferenceClient):
                 top_p=top_p,
                 max_output_tokens=max_tokens,
                 tool_config=tool_config,
-                tools=[types.Tool(
-                        function_declarations=[t[1]]
-                    ) for t in filtered_tools],
+                tools=[
+                    types.Tool(function_declarations=[t[1]]) for t in filtered_tools
+                ],
             ),
         )
 
@@ -1022,14 +1022,10 @@ class GoogleGenAIInferenceClient(InferenceClient):
                             else:
                                 text_block["text"] += part.text
 
-
             return ([text_block] if text_block else []) + tool_call_blocks
-        
 
         except Exception as e:
             raise InferenceException()
-
-
 
     @backoff.on_exception(backoff.expo, InferenceException, max_time=60)
     async def get_generation(
@@ -1042,9 +1038,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
             messages = messages[1:]
         # Convert messages to Google's format
         processed_messages = [
-            types.Content(
-                role=msg.role.value, parts=[types.Part(text=msg.content)]
-            )
+            types.Content(role=msg.role.value, parts=[types.Part(text=msg.content)])
             for msg in messages
         ]
 
@@ -1074,9 +1068,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
             messages = messages[1:]
 
         processed_messages = [
-            types.Content(
-                role=msg.role.value, parts=[types.Part(text=msg.content)]
-            )
+            types.Content(role=msg.role.value, parts=[types.Part(text=msg.content)])
             for msg in messages
         ]
 
