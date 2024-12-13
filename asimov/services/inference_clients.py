@@ -282,7 +282,7 @@ class BedrockInferenceClient(InferenceClient):
         self,
         messages: List[ChatMessage],
         max_tokens=8192,
-        top_p=0.5,
+        top_p=0.9,
         temperature=0.5,
     ):
         system = ""
@@ -445,69 +445,6 @@ class BedrockInferenceClient(InferenceClient):
             return current_content
 
         raise Exception("Max retries exceeded")
-
-    @tracer.start_as_current_span(name="BedrockInferenceClient.connect_and_listen")
-    async def connect_and_listen(
-        self,
-        messages: List[ChatMessage],
-        max_tokens=8192,
-        top_p=0.9,
-        temperature=0.5,
-    ):
-        system = ""
-        if messages[0].role == ChatRole.SYSTEM:
-            system = messages[0].content
-            messages = messages[1:]
-
-        request = AnthropicRequest(
-            anthropic_version=self.anthropic_version,
-            system=system,
-            top_p=top_p,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            messages=[
-                {
-                    "role": msg.role.value,
-                    "content": [{"type": "text", "text": msg.content}],
-                }
-                for msg in messages
-            ],
-        )
-
-        async with self.session.client(
-            service_name="bedrock-runtime",
-            region_name=self.region_name,
-        ) as client:
-            response = await client.invoke_model_with_response_stream(
-                body=request.model_dump_json(exclude={"tools", "tool_choice"}),
-                modelId=self.model,
-                contentType="application/json",
-                accept="application/json",
-            )
-
-            async for chunk in response["body"]:
-                chunk_json = json.loads(chunk["chunk"]["bytes"].decode())
-                chunk_type = chunk_json["type"]
-
-                if chunk_type == "content_block_delta":
-                    content_type = chunk_json["delta"]["type"]
-                    text = (
-                        chunk_json["delta"]["text"]
-                        if content_type == "text_delta"
-                        else ""
-                    )
-                    yield text
-                elif chunk_type == "message_start":
-                    self._account_input_tokens(
-                        chunk_json["message"]["usage"]["input_tokens"]
-                    )
-                elif chunk_type == "message_delta":
-                    self._account_output_tokens(chunk_json["usage"]["output_tokens"])
-
-
-def fatal_status(e: httpx.HTTPStatusError) -> bool:
-    return e.response.status_code == 400
-
 
 class AnthropicInferenceClient(InferenceClient):
     def __init__(
