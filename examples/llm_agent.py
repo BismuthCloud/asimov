@@ -271,13 +271,12 @@ class LLMFlowControlModule(AgentModule):
 
         try:
             print(f"{self.name}: Sending analysis request to LLM")
-            response = await asyncio.wait_for(
+            analysis = await asyncio.wait_for(
                 self.client.get_generation(
                     [ChatMessage(role=ChatRole.USER, content=prompt)]
                 ),
                 timeout=30.0,
             )
-            analysis = response.choices[0].message.content
             print(f"{self.name}: Received analysis result from LLM")
         except asyncio.TimeoutError:
             print(f"{self.name}: Timeout waiting for LLM analysis response")

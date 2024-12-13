@@ -48,6 +48,7 @@ async def test_tool_chain_streaming():
     mock_aiter.__aiter__.return_value = response_chunks
 
     mock_response = AsyncMock()
+    mock_response.status_code = 200
     mock_response.aiter_lines = MagicMock(return_value=mock_aiter)
     mock_response.__aenter__.return_value = mock_response
     mock_response.__aexit__.return_value = MagicMock()
