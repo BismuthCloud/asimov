@@ -14,7 +14,8 @@ import opentelemetry.trace
 import pydantic_core
 import vertexai.generative_models
 import google.api_core.exceptions
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 from asimov.asimov_base import AsimovBase
 
@@ -86,13 +87,13 @@ class InferenceClient(ABC):
 
     @abstractmethod
     async def connect_and_listen(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.9, temperature=0.5
     ):
         pass
 
     @abstractmethod
     async def get_generation(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.9, temperature=0.5
     ):
         pass
 
@@ -103,7 +104,7 @@ class InferenceClient(ABC):
         tools: List[Tuple[Callable, Dict[str, Any]]],
         system: Optional[str] = None,
         max_tokens=8192,
-        top_p=0.5,
+        top_p=0.9,
         temperature=0.5,
         tool_choice="any",
         middlewares: List[Callable[[dict[str, Any]], Awaitable[None]]] = [],
@@ -116,7 +117,7 @@ class InferenceClient(ABC):
         messages: List[ChatMessage],
         tools: List[Tuple[Callable, Dict[str, Any]]],
         max_tokens=8192,
-        top_p=0.5,
+        top_p=0.9,
         temperature=0.5,
         max_iterations=10,
         tool_choice="any",
@@ -229,7 +230,7 @@ class BedrockInferenceClient(InferenceClient):
         self,
         messages: List[ChatMessage],
         max_tokens=8192,
-        top_p=0.5,
+        top_p=0.9,
         temperature=0.5,
     ):
 
@@ -346,7 +347,7 @@ class BedrockInferenceClient(InferenceClient):
         tools: List[Tuple[Callable, Dict[str, Any]]],
         system: Optional[str] = None,
         max_tokens=8192,
-        top_p=0.5,
+        top_p=0.9,
         temperature=0.5,
         tool_choice="any",
         middlewares: List[Callable[[dict[str, Any]], Awaitable[None]]] = [],
@@ -443,6 +444,70 @@ class BedrockInferenceClient(InferenceClient):
 
             return current_content
 
+        raise Exception("Max retries exceeded")
+
+    @tracer.start_as_current_span(name="BedrockInferenceClient.connect_and_listen")
+    async def connect_and_listen(
+        self,
+        messages: List[ChatMessage],
+        max_tokens=8192,
+        top_p=0.9,
+        temperature=0.5,
+    ):
+        system = ""
+        if messages[0].role == ChatRole.SYSTEM:
+            system = messages[0].content
+            messages = messages[1:]
+
+        request = AnthropicRequest(
+            anthropic_version=self.anthropic_version,
+            system=system,
+            top_p=top_p,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            messages=[
+                {
+                    "role": msg.role.value,
+                    "content": [{"type": "text", "text": msg.content}],
+                }
+                for msg in messages
+            ],
+        )
+
+        async with self.session.client(
+            service_name="bedrock-runtime",
+            region_name=self.region_name,
+        ) as client:
+            response = await client.invoke_model_with_response_stream(
+                body=request.model_dump_json(exclude={"tools", "tool_choice"}),
+                modelId=self.model,
+                contentType="application/json",
+                accept="application/json",
+            )
+
+            async for chunk in response["body"]:
+                chunk_json = json.loads(chunk["chunk"]["bytes"].decode())
+                chunk_type = chunk_json["type"]
+
+                if chunk_type == "content_block_delta":
+                    content_type = chunk_json["delta"]["type"]
+                    text = (
+                        chunk_json["delta"]["text"]
+                        if content_type == "text_delta"
+                        else ""
+                    )
+                    yield text
+                elif chunk_type == "message_start":
+                    self._account_input_tokens(
+                        chunk_json["message"]["usage"]["input_tokens"]
+                    )
+                elif chunk_type == "message_delta":
+                    self._account_output_tokens(chunk_json["usage"]["output_tokens"])
+
+
+def fatal_status(e: httpx.HTTPStatusError) -> bool:
+    return e.response.status_code == 400
+
 
 class AnthropicInferenceClient(InferenceClient):
     def __init__(
@@ -458,7 +523,7 @@ class AnthropicInferenceClient(InferenceClient):
     @tracer.start_as_current_span(name="AnthropicInferenceClient.get_generation")
     @backoff.on_exception(backoff.expo, InferenceException, max_time=60)
     async def get_generation(
-        self, messages: List[ChatMessage], max_tokens=8192, top_p=0.5, temperature=0.5
+        self, messages: List[ChatMessage], max_tokens=8192, top_p=0.9, temperature=0.5
     ):
         system = None
         if messages[0].role == ChatRole.SYSTEM:
@@ -525,7 +590,7 @@ class AnthropicInferenceClient(InferenceClient):
 
     @tracer.start_as_current_span(name="AnthropicInferenceClient.connect_and_listen")
     async def connect_and_listen(
-        self, messages: List[ChatMessage], max_tokens=8192, top_p=0.5, temperature=0.5
+        self, messages: List[ChatMessage], max_tokens=8192, top_p=0.9, temperature=0.5
     ):
 
         system = None
@@ -625,7 +690,7 @@ class AnthropicInferenceClient(InferenceClient):
         tools,
         system=None,
         max_tokens=8192,
-        top_p=0.5,
+        top_p=0.9,
         temperature=0.5,
         tool_choice="any",
         middlewares=[],
@@ -787,7 +852,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
         model: str,
         api_key: str,
     ):
-        genai.configure(api_key=api_key)
+        self.client = genai.Client(api_key=api_key)
         self.model = model
 
     async def _tool_chain_stream(
@@ -795,9 +860,10 @@ class GoogleGenAIInferenceClient(InferenceClient):
         serialized_messages,
         tools,
         max_tokens=8192,
-        top_p=0.5,
+        top_p=0.9,
         system=None,
         temperature=0.5,
+        # Google is kind of meh with 'any' support
         tool_choice="any",
         middlewares=[],
     ):
@@ -809,7 +875,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
             for key, value in schema.items():
                 if key == "type":
                     # Convert type value to uppercase and change key to type_
-                    converted["type_"] = value.upper()
+                    converted["type"] = value.upper()
                 elif key == "properties":
                     # Recursively convert nested property schemas
                     converted[key] = {k: convert_type_keys(v) for k, v in value.items()}
@@ -848,10 +914,10 @@ class GoogleGenAIInferenceClient(InferenceClient):
 
             if (
                 parameters
-                and parameters["type_"] == "OBJECT"
+                and parameters["type"] == "OBJECT"
                 and parameters["properties"] != {}
                 or parameters
-                and parameters["type_"] != "OBJECT"
+                and parameters["type"] != "OBJECT"
             ):
                 function_declaration["parameters"] = parameters
 
@@ -866,11 +932,11 @@ class GoogleGenAIInferenceClient(InferenceClient):
                 and message["content"][0]["type"] == "tool_result"
             ):
                 # Handle tool result responses
-                processed_message = genai.protos.Content(
+                processed_message = types.Content(
                     role=message["role"],
                     parts=[
-                        genai.protos.Part(
-                            function_response=genai.protos.FunctionResponse(
+                        types.Part(
+                            function_response=types.FunctionResponse(
                                 name=message["content"][0]["tool_use_id"],
                                 response={"result": message["content"][0]["content"]},
                             )
@@ -883,11 +949,11 @@ class GoogleGenAIInferenceClient(InferenceClient):
                         (c for c in message["content"] if c["type"] == "tool_use"), None
                     )
                     if tool_call:
-                        processed_message = genai.protos.Content(
+                        processed_message = types.Content(
                             role=message["role"],
                             parts=[
-                                genai.protos.Part(
-                                    function_call=genai.protos.FunctionCall(
+                                types.Part(
+                                    function_call=types.FunctionCall(
                                         name=tool_call["name"],
                                         args=dict(tool_call["input"]),
                                     )
@@ -898,69 +964,76 @@ class GoogleGenAIInferenceClient(InferenceClient):
                         text_content = next(
                             c["text"] for c in message["content"] if c["type"] == "text"
                         )
-                        processed_message = genai.protos.Content(
+                        processed_message = types.Content(
                             role=message["role"],
-                            parts=[genai.protos.Part(text=text_content)],
+                            parts=[types.Part(text=text_content)],
                         )
 
             processed_messages.append(processed_message)
 
-        tool_config = {"function_calling_config": {"mode": tool_choice}}
+        tool_config = {"function_calling_config": {"mode": tool_choice.upper()}}
 
-        model = genai.GenerativeModel(
-            model_name=self.model,
-            system_instruction=system,
-            tools=[
-                genai.protos.Tool(
-                    function_declarations=[genai.protos.FunctionDeclaration(**t[1])]
-                )
-                for t in filtered_tools
-            ],
-            tool_config=tool_config,
-            generation_config={
-                "max_output_tokens": max_tokens,
-                "top_p": top_p,
-                "temperature": temperature,
-            },
+        if self.model == "gemini-2.0-flash-exp":
+            asyncio.sleep(6.5)
+
+        request = self.client.aio.models.generate_content_stream(
+            model=self.model,
+            contents=processed_messages,
+            config=types.GenerateContentConfig(
+                temperature=temperature,
+                system_instruction=system,
+                top_p=top_p,
+                max_output_tokens=max_tokens,
+                tool_config=tool_config,
+                tools=[types.Tool(
+                        function_declarations=[t[1]]
+                    ) for t in filtered_tools],
+            ),
         )
 
-        text_block = None
-        tool_call_blocks = []
+        try:
+            text_block = None
+            tool_call_blocks = []
 
-        response = await model.generate_content_async(processed_messages, stream=True)
+            # Should be able to handle streaming directly without thread pool
+            async for chunk in request:
+                if chunk.candidates:
+                    for part in chunk.candidates[0].content.parts:
+                        if function_call := part.function_call:
+                            args_dict = _proto_to_dict(function_call.args)
+                            # Clean up over-escaped strings
+                            if isinstance(args_dict, dict):
+                                for k, v in args_dict.items():
+                                    if isinstance(v, str):
+                                        args_dict[k] = smart_unescape_code(v)
 
-        # Should be able to handle streaming directly without thread pool
-        async for chunk in response:
-            if chunk.candidates:
-                for part in chunk.candidates[0].content.parts:
-                    if function_call := part.function_call:
-                        args_dict = _proto_to_dict(function_call.args)
-                        # Clean up over-escaped strings
-                        if isinstance(args_dict, dict):
-                            for k, v in args_dict.items():
-                                if isinstance(v, str):
-                                    args_dict[k] = smart_unescape_code(v)
+                            tool_block = {
+                                "type": "tool_use",
+                                "id": str(len(tool_call_blocks)),
+                                "name": function_call.name,
+                                "input": args_dict,
+                            }
+                            tool_call_blocks.append(tool_block)
+                            for middleware in middlewares:
+                                await middleware(tool_block)
+                        elif part.text:
+                            if not text_block:
+                                text_block = {"type": "text", "text": part.text}
+                            else:
+                                text_block["text"] += part.text
 
-                        tool_block = {
-                            "type": "tool_use",
-                            "id": str(len(tool_call_blocks)),
-                            "name": function_call.name,
-                            "input": args_dict,
-                        }
-                        tool_call_blocks.append(tool_block)
-                        for middleware in middlewares:
-                            await middleware(tool_block)
-                    elif part.text:
-                        if not text_block:
-                            text_block = {"type": "text", "text": part.text}
-                        else:
-                            text_block["text"] += part.text
 
-        return ([text_block] if text_block else []) + tool_call_blocks
+            return ([text_block] if text_block else []) + tool_call_blocks
+        
+
+        except Exception as e:
+            raise InferenceException()
+
+
 
     @backoff.on_exception(backoff.expo, InferenceException, max_time=60)
     async def get_generation(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.9, temperature=0.5
     ):
         system_instruction = None
 
@@ -969,23 +1042,22 @@ class GoogleGenAIInferenceClient(InferenceClient):
             messages = messages[1:]
         # Convert messages to Google's format
         processed_messages = [
-            genai.protos.Content(
-                role=msg.role.value, parts=[genai.protos.Part(text=msg.content)]
+            types.Content(
+                role=msg.role.value, parts=[types.Part(text=msg.content)]
             )
             for msg in messages
         ]
 
-        model = genai.GenerativeModel(
-            model_name=self.model,
-            system_instruction=system_instruction,
-            generation_config={
-                "max_output_tokens": max_tokens,
-                "top_p": top_p,
-                "temperature": temperature,
-            },
+        response = await self.client.aio.models.generate_content(
+            model=self.model,
+            contents=processed_messages,
+            config=types.GenerateContentConfig(
+                temperature=temperature,
+                system_instruction=system_instruction,
+                top_p=top_p,
+                max_output_tokens=max_tokens,
+            ),
         )
-
-        response = await model.generate_content_async(processed_messages)
 
         if not response.candidates:
             return ""
@@ -993,7 +1065,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
         return response.text
 
     async def connect_and_listen(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.9, temperature=0.5
     ):
         system_instruction = None
 
@@ -1002,23 +1074,22 @@ class GoogleGenAIInferenceClient(InferenceClient):
             messages = messages[1:]
 
         processed_messages = [
-            genai.protos.Content(
-                role=msg.role.value, parts=[genai.protos.Part(text=msg.content)]
+            types.Content(
+                role=msg.role.value, parts=[types.Part(text=msg.content)]
             )
             for msg in messages
         ]
 
-        model = genai.GenerativeModel(
-            model_name=self.model,
-            system_instruction=system_instruction,
-            generation_config={
-                "max_output_tokens": max_tokens,
-                "top_p": top_p,
-                "temperature": temperature,
-            },
+        response = self.client.aio.models.generate_content_stream(
+            model=self.model,
+            contents=processed_messages,
+            config=types.GenerateContentConfig(
+                temperature=temperature,
+                system_instruction=system_instruction,
+                top_p=top_p,
+                max_output_tokens=max_tokens,
+            ),
         )
-
-        response = await model.generate_content_async(processed_messages, stream=True)
 
         async for chunk in response:
             if chunk.text:
@@ -1029,8 +1100,8 @@ class OAIRequest(AsimovBase):
     model: str
     messages: List[Dict[str, Any]]
     max_tokens: int = 4096
-    temperature: float = 1.0
-    top_p: float = 1.0
+    temperature: float = 0.5
+    top_p: float = 0.9
     stream: bool = False
     stream_options: Dict[str, Any] = {}
     tools: list[dict] = [{}]
@@ -1168,7 +1239,7 @@ class OAIInferenceClient(InferenceClient):
         tools,
         system=None,
         max_tokens=8192,
-        top_p=0.5,
+        top_p=0.9,
         temperature=0.5,
         tool_choice="any",
         middlewares=[],
@@ -1325,7 +1396,7 @@ class OpenRouterInferenceClient(OAIInferenceClient):
         tools,
         system=None,
         max_tokens=8192,
-        top_p=0.5,
+        top_p=0.9,
         temperature=0.5,
         tool_choice="any",
         middlewares=[],
@@ -1510,7 +1581,7 @@ class VertexInferenceClient(InferenceClient):
         self,
         messages: List[ChatMessage],
         max_tokens=4096,
-        top_p=0.5,
+        top_p=0.9,
         temperature=0.5,
         schema=None,
     ):
@@ -1560,7 +1631,7 @@ class VertexInferenceClient(InferenceClient):
 
     @tracer.start_as_current_span(name="VertexInferenceClient.connect_and_listen")
     async def connect_and_listen(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.5, temperature=0.5
+        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.9, temperature=0.5
     ):
         if messages[0].role == ChatRole.SYSTEM:
             model = vertexai.generative_models.GenerativeModel(
