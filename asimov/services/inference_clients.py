@@ -69,6 +69,10 @@ class AnthropicRequest(AsimovBase):
 
 class InferenceClient(ABC):
     model: str
+    _trace_id: int = 0
+    trace_cb: Optional[
+        Callable[[int, list[dict[str, Any]], list[dict[str, Any]]], Awaitable[None]]
+    ] = None
 
     _input_tokens: int = 0
     _output_tokens: int = 0
@@ -84,6 +88,11 @@ class InferenceClient(ABC):
         opentelemetry.trace.get_current_span().set_attribute(
             "inference.usage.output_tokens", tokens
         )
+
+    async def _trace(self, request, response):
+        if self.trace_cb:
+            await self.trace_cb(self._trace_id, request, response)
+            self._trace_id += 1
 
     @abstractmethod
     async def connect_and_listen(
@@ -156,6 +165,7 @@ class InferenceClient(ABC):
                     if not calls:
                         raise InferenceException("No tool calls returned: " + str(resp))
 
+                    await self._trace(serialized_messages, resp)
                     break
                 except ValueError as e:
                     print(f"ValueError hit ({e}), bailing")
@@ -275,6 +285,8 @@ class BedrockInferenceClient(InferenceClient):
             self._account_input_tokens(body["usage"]["input_tokens"])
             self._account_output_tokens(body["usage"]["output_tokens"])
 
+            await self._trace(request.messages, body["content"])
+
             return body["content"][0]["text"]
 
     @tracer.start_as_current_span(name="BedrockInferenceClient.connect_and_listen")
@@ -321,6 +333,8 @@ class BedrockInferenceClient(InferenceClient):
             except botocore.exceptions.ClientError as e:
                 raise InferenceException(str(e))
 
+            out = ""
+
             async for chunk in response["body"]:
                 chunk_json = json.loads(chunk["chunk"]["bytes"].decode())
                 chunk_type = chunk_json["type"]
@@ -332,6 +346,7 @@ class BedrockInferenceClient(InferenceClient):
                         if content_type == "text_delta"
                         else ""
                     )
+                    out += text
                     yield text
                 elif chunk_type == "message_start":
                     self._account_input_tokens(
@@ -339,6 +354,8 @@ class BedrockInferenceClient(InferenceClient):
                     )
                 elif chunk_type == "message_delta":
                     self._account_output_tokens(chunk_json["usage"]["output_tokens"])
+
+            await self._trace(request.messages, [{"text": out}])
 
     @tracer.start_as_current_span(name="BedrockInferenceClient.tool_chain")
     async def _tool_chain_stream(
@@ -446,6 +463,7 @@ class BedrockInferenceClient(InferenceClient):
 
         raise Exception("Max retries exceeded")
 
+
 class AnthropicInferenceClient(InferenceClient):
     def __init__(
         self,
@@ -523,6 +541,8 @@ class AnthropicInferenceClient(InferenceClient):
             )
             self._account_output_tokens(body["usage"]["output_tokens"])
 
+            await self._trace(request["messages"], body["content"])
+
             return body["content"][0]["text"]
 
     @tracer.start_as_current_span(name="AnthropicInferenceClient.connect_and_listen")
@@ -586,6 +606,8 @@ class AnthropicInferenceClient(InferenceClient):
                 elif response.status_code != 200:
                     raise InferenceException(await response.aread())
 
+                out = ""
+
                 async for line in response.aiter_lines():
                     if line.startswith("data: "):
                         chunk_json = json.loads(line[6:])
@@ -598,6 +620,7 @@ class AnthropicInferenceClient(InferenceClient):
                                 if content_type == "text_delta"
                                 else ""
                             )
+                            out += text
                             yield text
                         elif chunk_type == "message_start":
                             self._account_input_tokens(
@@ -619,6 +642,8 @@ class AnthropicInferenceClient(InferenceClient):
                             self._account_output_tokens(
                                 chunk_json["usage"]["output_tokens"],
                             )
+
+                await self._trace(request["messages"], [{"text": out}])
 
     @tracer.start_as_current_span(name="AnthropicInferenceClient.tool_chain")
     async def _tool_chain_stream(
@@ -993,6 +1018,17 @@ class GoogleGenAIInferenceClient(InferenceClient):
         if not response.candidates:
             return ""
 
+        await self._trace(
+            [
+                {
+                    "role": msg.role.value,
+                    "content": [{"type": "text", "text": msg.content}],
+                }
+                for msg in messages
+            ],
+            [{"text": response.text}],
+        )
+
         return response.text
 
     async def connect_and_listen(
@@ -1020,9 +1056,23 @@ class GoogleGenAIInferenceClient(InferenceClient):
             ),
         )
 
+        out = ""
+
         async for chunk in response:
             if chunk.text:
+                out += chunk.text
                 yield chunk.text
+
+        await self._trace(
+            [
+                {
+                    "role": msg.role.value,
+                    "content": [{"type": "text", "text": msg.content}],
+                }
+                for msg in messages
+            ],
+            [{"text": out}],
+        )
 
 
 class OAIRequest(AsimovBase):
@@ -1099,6 +1149,11 @@ class OAIInferenceClient(InferenceClient):
             )
             self._account_output_tokens(body["usage"]["completion_tokens"])
 
+            await self._trace(
+                request["messages"],
+                [{"text": body["choices"][0]["message"]["content"]}],
+            )
+
             return body["choices"][0]["message"]["content"]
 
     @tracer.start_as_current_span(name="OAIInferenceClient.connect_and_listen")
@@ -1137,6 +1192,7 @@ class OAIInferenceClient(InferenceClient):
                 elif response.status_code != 200:
                     raise InferenceException(await response.aread())
 
+                out = ""
                 async for line in response.aiter_lines():
                     if line.startswith("data: "):
                         if line.strip() == "data: [DONE]":
@@ -1147,6 +1203,7 @@ class OAIInferenceClient(InferenceClient):
                         if data["choices"] and data["choices"][0]["delta"].get(
                             "content"
                         ):
+                            out += data["choices"][0]["delta"]["content"]
                             yield data["choices"][0]["delta"]["content"]
                         elif data.get("usage"):
                             self._account_input_tokens(data["usage"]["prompt_tokens"])
@@ -1160,6 +1217,11 @@ class OAIInferenceClient(InferenceClient):
                             self._account_output_tokens(
                                 data["usage"]["completion_tokens"]
                             )
+
+                await self._trace(
+                    request.messages,
+                    [{"text": out}],
+                )
 
     @tracer.start_as_current_span(name="OAIInferenceClient.tool_chain")
     async def _tool_chain_stream(
@@ -1376,6 +1438,22 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                     }
                     for result in message["content"]
                 )
+                openrouter_messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Here is the result of the tool call",  # need text here to enable caching since cache control can only be set on text blocks.
+                            }
+                            | (
+                                {"cache_control": {"type": "ephemeral"}}
+                                if "cache_control" in message["content"][-1]
+                                else {}
+                            )
+                        ],
+                    }
+                )
             else:
                 tool_calls = [
                     content
@@ -1406,7 +1484,7 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                             for tc in tool_calls
                         ],
                     }
-                openrouter_messages.append(message)
+                openrouter_messages.append(message.copy())
 
         openrouter_tools = []
         for _, tool in tools:
@@ -1441,7 +1519,7 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
                 },
-                timeout=180,
+                timeout=60,
             ) as response:
                 if response.status_code == 400:
                     raise ValueError()
@@ -1556,6 +1634,16 @@ class VertexInferenceClient(InferenceClient):
         self._account_input_tokens(resp.usage_metadata.prompt_token_count)
         self._account_output_tokens(resp.usage_metadata.candidates_token_count)
 
+        await self._trace(
+            [
+                {
+                    "role": msg.role.value,
+                    "content": [{"text": msg.content}],
+                }
+                for msg in messages
+            ],
+            [{"text": resp.text}],
+        )
         return resp.text
 
     @tracer.start_as_current_span(name="VertexInferenceClient.connect_and_listen")
@@ -1570,6 +1658,7 @@ class VertexInferenceClient(InferenceClient):
         else:
             model = vertexai.generative_models.GenerativeModel(self.model)
 
+        out = ""
         async for chunk in model.generate_content_async(
             [
                 vertexai.generative_models.Content(
@@ -1583,7 +1672,19 @@ class VertexInferenceClient(InferenceClient):
             ),
             stream=True,
         ):
+            out += chunk.text
             yield chunk.text
             if chunk.usage_metadata:
                 self._account_input_tokens(chunk.usage_metadata.prompt_token_count)
                 self._account_output_tokens(chunk.usage_metadata.candidates_token_count)
+
+        await self._trace(
+            [
+                {
+                    "role": msg.role.value,
+                    "content": [{"text": msg.content}],
+                }
+                for msg in messages
+            ],
+            [{"text": out}],
+        )
