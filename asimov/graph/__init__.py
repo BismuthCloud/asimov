@@ -292,6 +292,9 @@ class CompositeModule(AgentModule):
                         module.config.middlewares, result, cache
                     )
             except asyncio.TimeoutError:
+                print(
+                    f"Module {module.name} execution timed out after {module.config.timeout} seconds"
+                )
                 return {
                     "status": "error",
                     "error": f"Module {module.name} execution timed out after {module.config.timeout} seconds",
