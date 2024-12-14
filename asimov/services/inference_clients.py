@@ -1255,6 +1255,8 @@ class OAIInferenceClient(InferenceClient):
 
         request = request.__dict__
 
+        print(request)
+
         async with httpx.AsyncClient() as client:
             async with client.stream(
                 "POST",
