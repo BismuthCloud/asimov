@@ -1376,22 +1376,6 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                     }
                     for result in message["content"]
                 )
-                openrouter_messages.append(
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "2OlhsiUTobMgfLbuuyPv",  # placeholder
-                            }
-                            | (
-                                {"cache_control": {"type": "ephemeral"}}
-                                if "cache_control" in message["content"][-1]
-                                else {}
-                            )
-                        ],
-                    }
-                )
             else:
                 tool_calls = [
                     content
