@@ -150,6 +150,12 @@ class InferenceClient(ABC):
                         tool_choice=tool_choice,
                         middlewares=middlewares,
                     )
+
+                    calls = [c for c in resp if c["type"] == "tool_use"]
+
+                    if not calls:
+                        raise InferenceException("No tool calls returned: " + str(resp))
+
                     break
                 except ValueError as e:
                     print(f"ValueError hit ({e}), bailing")
@@ -176,12 +182,6 @@ class InferenceClient(ABC):
                     "content": resp,
                 }
             )
-
-            calls = [c for c in resp if c["type"] == "tool_use"]
-
-            if not calls:
-                print("no call, returning", resp)
-                return serialized_messages
 
             content_blocks = []
             for call in calls:
@@ -1025,7 +1025,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
             return ([text_block] if text_block else []) + tool_call_blocks
 
         except Exception as e:
-            raise InferenceException()
+            raise InferenceException(str(e))
 
     @backoff.on_exception(backoff.expo, InferenceException, max_time=60)
     async def get_generation(
@@ -1135,7 +1135,7 @@ class OAIInferenceClient(InferenceClient):
                 top_p=top_p,
                 temperature=temperature,
                 stream=False,
-            ).model_dump(exclude={"stream_options"})
+            ).model_dump(exclude={"stream_options", "tools", "tool_choice"})
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -1236,6 +1236,20 @@ class OAIInferenceClient(InferenceClient):
         tool_choice="any",
         middlewares=[],
     ):
+        if system:
+            serialized_messages = [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": system,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            ] + serialized_messages
+
         def wrap_tool_schema(tool):
             if "cache_control" in tool[1]:
                 del tool[1]["cache_control"]
@@ -1532,7 +1546,7 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                                 else:
                                     text_block["text"] += d["content"]
                             for tc in d.get("tool_calls", []):
-                                if "id" in tc:
+                                if tc.get("id"):
                                     tool_call_blocks.append(
                                         {
                                             "type": "tool_use",
@@ -1544,7 +1558,7 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                                     )
                                 tool_call_blocks[tc["index"]]["raw_input"] += tc[
                                     "function"
-                                ]["arguments"]
+                                ].get("arguments", "")
                                 try:
                                     tool_call_blocks[tc["index"]]["input"] = (
                                         pydantic_core.from_json(
