@@ -357,7 +357,7 @@ class BedrockInferenceClient(InferenceClient):
 
             await self._trace(request.messages, [{"text": out}])
 
-    @tracer.start_as_current_span(name="BedrockInferenceClient.tool_chain")
+    @tracer.start_as_current_span(name="BedrockInferenceClient._tool_chain_stream")
     async def _tool_chain_stream(
         self,
         serialized_messages: List[Dict[str, Any]],
@@ -645,7 +645,7 @@ class AnthropicInferenceClient(InferenceClient):
 
                 await self._trace(request["messages"], [{"text": out}])
 
-    @tracer.start_as_current_span(name="AnthropicInferenceClient.tool_chain")
+    @tracer.start_as_current_span(name="AnthropicInferenceClient._tool_chain_stream")
     async def _tool_chain_stream(
         self,
         serialized_messages,
@@ -817,6 +817,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
         self.client = genai.Client(api_key=api_key)
         self.model = model
 
+    @tracer.start_as_current_span(name="GoogleGenAIInferenceClient._tool_chain_stream")
     async def _tool_chain_stream(
         self,
         serialized_messages,
@@ -989,6 +990,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
         except Exception as e:
             raise InferenceException(str(e))
 
+    @tracer.start_as_current_span(name="GoogleGenAIInferenceClient.get_generation")
     @backoff.on_exception(backoff.expo, InferenceException, max_time=60)
     async def get_generation(
         self, messages: List[ChatMessage], max_tokens=4096, top_p=0.9, temperature=0.5
@@ -1031,6 +1033,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
 
         return response.text
 
+    @tracer.start_as_current_span(name="GoogleGenAIInferenceClient.connect_and_listen")
     async def connect_and_listen(
         self, messages: List[ChatMessage], max_tokens=4096, top_p=0.9, temperature=0.5
     ):
@@ -1223,7 +1226,7 @@ class OAIInferenceClient(InferenceClient):
                     [{"text": out}],
                 )
 
-    @tracer.start_as_current_span(name="OAIInferenceClient.tool_chain")
+    @tracer.start_as_current_span(name="OAIInferenceClient._tool_chain_stream")
     async def _tool_chain_stream(
         self,
         serialized_messages,
@@ -1397,6 +1400,7 @@ class OpenRouterInferenceClient(OAIInferenceClient):
             api_url="https://openrouter.ai/api/v1/chat/completions",
         )
 
+    @tracer.start_as_current_span(name="OpenRouterInferenceClient._tool_chain_stream")
     async def _tool_chain_stream(
         self,
         serialized_messages,
