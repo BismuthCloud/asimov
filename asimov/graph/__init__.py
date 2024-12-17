@@ -711,11 +711,11 @@ class Agent(AsimovBase):
             except Exception as e:
                 last_exception = e
 
-                print(
-                    f"Error in node {node_name} (attempt {retries + 1}/{node.node_config.max_retries}): {str(e)}"
+                self._logger.exception(
+                    f"Error in node {node_name} (attempt {retries + 1}/{node.node_config.max_retries})"
                 )
-                print(traceback.format_exc())
                 retries += 1
+
         print(f"Node {node_name} failed after {node.node_config.max_retries} attempts")
 
         if not result:
