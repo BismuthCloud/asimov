@@ -138,6 +138,7 @@ class InferenceClient(ABC):
         max_iterations=10,
         tool_choice="any",
         middlewares: List[Callable[[dict[str, Any]], Awaitable[None]]] = [],
+        mode_swap_callback: any = None
     ):
         tools[-1][1]["cache_control"] = {"type": "ephemeral"}
 
@@ -154,6 +155,13 @@ class InferenceClient(ABC):
         ]
 
         for _ in range(max_iterations):
+            if mode_swap_callback and len(serialized_messages) > 2:
+                prompt, tools = await mode_swap_callback()
+                tools[-1][1]["cache_control"] = {"type": "ephemeral"}
+                tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
+
+                serialized_messages[0]["content"] = [{"type": "text", "text": prompt}]
+
             for retry in range(1, 5):
                 try:
                     resp = await self._tool_chain_stream(
@@ -203,7 +211,12 @@ class InferenceClient(ABC):
             content_blocks = []
             for call in calls:
                 try:
-                    result = await tool_funcs[call["name"]](call["input"])
+                    func = tool_funcs.get(call["name"])
+
+                    if not func:
+                        return "This tool is not available please select and use an available tool."
+
+                    result = await func(call["input"])
                 except StopAsyncIteration:
                     return serialized_messages
 
