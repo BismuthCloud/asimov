@@ -67,31 +67,38 @@ class AnthropicRequest(AsimovBase):
     top_k: int = 50
 
 
+class InferenceCost(AsimovBase):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_write_input_tokens: int = 0
+
+
 class InferenceClient(ABC):
     model: str
     _trace_id: int = 0
     trace_cb: Optional[
-        Callable[[int, list[dict[str, Any]], list[dict[str, Any]]], Awaitable[None]]
+        Callable[
+            [int, list[dict[str, Any]], list[dict[str, Any]], InferenceCost],
+            Awaitable[None],
+        ]
     ] = None
-
-    _input_tokens: int = 0
-    _output_tokens: int = 0
-
-    def _account_input_tokens(self, tokens):
-        self._input_tokens += tokens
-        opentelemetry.trace.get_current_span().set_attribute(
-            "inference.usage.input_tokens", tokens
-        )
-
-    def _account_output_tokens(self, tokens):
-        self._output_tokens += tokens
-        opentelemetry.trace.get_current_span().set_attribute(
-            "inference.usage.output_tokens", tokens
-        )
+    _cost: InferenceCost = InferenceCost()
 
     async def _trace(self, request, response):
         if self.trace_cb:
-            await self.trace_cb(self._trace_id, request, response)
+            await self.trace_cb(self._trace_id, request, response, self._cost)
+            opentelemetry.trace.get_current_span().set_attribute(
+                "inference.usage.input_tokens", self._cost.input_tokens
+            )
+            opentelemetry.trace.get_current_span().set_attribute(
+                "inference.usage.cached_input_tokens",
+                self._cost.cache_read_input_tokens,
+            )
+            opentelemetry.trace.get_current_span().set_attribute(
+                "inference.usage.output_tokens", self._cost.output_tokens
+            )
+            self._cost = InferenceCost()
             self._trace_id += 1
 
     @abstractmethod
@@ -282,8 +289,8 @@ class BedrockInferenceClient(InferenceClient):
 
             body: dict = json.loads(await response["body"].read())
 
-            self._account_input_tokens(body["usage"]["input_tokens"])
-            self._account_output_tokens(body["usage"]["output_tokens"])
+            self._cost.input_tokens += body["usage"]["input_tokens"]
+            self._cost.output_tokens += body["usage"]["output_tokens"]
 
             await self._trace(request.messages, body["content"])
 
@@ -349,11 +356,11 @@ class BedrockInferenceClient(InferenceClient):
                     out += text
                     yield text
                 elif chunk_type == "message_start":
-                    self._account_input_tokens(
-                        chunk_json["message"]["usage"]["input_tokens"]
-                    )
+                    self._cost.input_tokens += chunk_json["message"]["usage"][
+                        "input_tokens"
+                    ]
                 elif chunk_type == "message_delta":
-                    self._account_output_tokens(chunk_json["usage"]["output_tokens"])
+                    self._cost.output_tokens += chunk_json["usage"]["output_tokens"]
 
             await self._trace(request.messages, [{"text": out}])
 
@@ -413,9 +420,9 @@ class BedrockInferenceClient(InferenceClient):
                 chunk_type = chunk_json["type"]
 
                 if chunk_type == "message_start":
-                    self._account_input_tokens(
-                        chunk_json["message"]["usage"]["input_tokens"]
-                    )
+                    self._cost.input_tokens += chunk_json["message"]["usage"][
+                        "input_tokens"
+                    ]
                 elif chunk_type == "content_block_start":
                     block_type = chunk_json["content_block"]["type"]
                     if block_type == "text":
@@ -454,9 +461,7 @@ class BedrockInferenceClient(InferenceClient):
                     }
                 elif chunk_type == "message_delta":
                     if chunk_json["delta"].get("stop_reason") == "tool_use":
-                        self._account_output_tokens(
-                            chunk_json["usage"]["output_tokens"]
-                        )
+                        self._cost.output_tokens += chunk_json["usage"]["output_tokens"]
                         break
 
             return current_content
@@ -529,17 +534,15 @@ class AnthropicInferenceClient(InferenceClient):
 
             body: dict = response.json()
 
-            self._account_input_tokens(
-                # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#tracking-cache-performance
-                body["usage"]["input_tokens"]
-                + body["usage"].get("cache_read_input_tokens", 0)
-                + body["usage"].get("cache_creation_input_tokens", 0),
+            # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#tracking-cache-performance
+            self._cost.input_tokens += body["usage"]["input_tokens"]
+            self._cost.cache_read_input_tokens += body["usage"].get(
+                "cache_read_input_tokens", 0
             )
-            opentelemetry.trace.get_current_span().set_attribute(
-                "inference.usage.cached_input_tokens",
-                body["usage"].get("cache_read_input_tokens", 0),
+            self._cost.cache_write_input_tokens += body["usage"].get(
+                "cache_creation_input_tokens", 0
             )
-            self._account_output_tokens(body["usage"]["output_tokens"])
+            self._cost.output_tokens += body["usage"]["output_tokens"]
 
             await self._trace(request["messages"], body["content"])
 
@@ -623,25 +626,19 @@ class AnthropicInferenceClient(InferenceClient):
                             out += text
                             yield text
                         elif chunk_type == "message_start":
-                            self._account_input_tokens(
-                                chunk_json["message"]["usage"]["input_tokens"]
-                                + chunk_json["message"]["usage"].get(
-                                    "cache_read_input_tokens", 0
-                                )
-                                + chunk_json["message"]["usage"].get(
-                                    "cache_creation_input_tokens", 0
-                                ),
-                            )
-                            opentelemetry.trace.get_current_span().set_attribute(
-                                "inference.usage.cached_input_tokens",
-                                chunk_json["message"]["usage"].get(
-                                    "cache_read_input_tokens", 0
-                                ),
-                            )
+                            self._cost.input_tokens += chunk_json["message"]["usage"][
+                                "input_tokens"
+                            ]
+                            self._cost.cache_read_input_tokens += chunk_json["message"][
+                                "usage"
+                            ].get("cache_read_input_tokens", 0)
+                            self._cost.cache_write_input_tokens += chunk_json[
+                                "message"
+                            ]["usage"].get("cache_creation_input_tokens", 0)
                         elif chunk_type == "message_delta":
-                            self._account_output_tokens(
-                                chunk_json["usage"]["output_tokens"],
-                            )
+                            self._cost.output_tokens += chunk_json["usage"][
+                                "output_tokens"
+                            ]
 
                 await self._trace(request["messages"], [{"text": out}])
 
@@ -707,21 +704,15 @@ class AnthropicInferenceClient(InferenceClient):
                     chunk_type = chunk_json["type"]
 
                     if chunk_type == "message_start":
-                        self._account_input_tokens(
-                            chunk_json["message"]["usage"]["input_tokens"]
-                            + chunk_json["message"]["usage"].get(
-                                "cache_read_input_tokens", 0
-                            )
-                            + chunk_json["message"]["usage"].get(
-                                "cache_creation_input_tokens", 0
-                            )
-                        )
-                        opentelemetry.trace.get_current_span().set_attribute(
-                            "inference.usage.cached_input_tokens",
-                            chunk_json["message"]["usage"].get(
-                                "cache_read_input_tokens", 0
-                            ),
-                        )
+                        self._cost.input_tokens += chunk_json["message"]["usage"][
+                            "input_tokens"
+                        ]
+                        self._cost.cache_read_input_tokens += chunk_json["message"][
+                            "usage"
+                        ].get("cache_read_input_tokens", 0)
+                        self._cost.cache_write_input_tokens += chunk_json["message"][
+                            "usage"
+                        ].get("cache_creation_input_tokens", 0)
                     elif chunk_type == "content_block_start":
                         block_type = chunk_json["content_block"]["type"]
                         if block_type == "text":
@@ -760,9 +751,9 @@ class AnthropicInferenceClient(InferenceClient):
                         }
                     elif chunk_type == "message_delta":
                         if chunk_json["delta"].get("stop_reason") == "tool_use":
-                            self._account_output_tokens(
-                                chunk_json["usage"]["output_tokens"]
-                            )
+                            self._cost.output_tokens += chunk_json["usage"][
+                                "output_tokens"
+                            ]
                             break
                     elif chunk_type == "error":
                         if chunk_json["error"]["type"] == "invalid_request_error":
@@ -1145,12 +1136,11 @@ class OAIInferenceClient(InferenceClient):
 
             body: dict = response.json()
 
-            self._account_input_tokens(body["usage"]["prompt_tokens"])
-            opentelemetry.trace.get_current_span().set_attribute(
-                "inference.usage.cached_input_tokens",
-                body["usage"].get("prompt_tokens_details", {}).get("cached_tokens", 0),
+            self._cost.input_tokens += body["usage"]["input_tokens"]
+            self._cost.cache_read_input_tokens += (
+                body["usage"].get("prompt_tokens_details", {}).get("cached_tokens", 0)
             )
-            self._account_output_tokens(body["usage"]["completion_tokens"])
+            self._cost.output_tokens += body["usage"]["completion_tokens"]
 
             await self._trace(
                 request["messages"],
@@ -1209,17 +1199,16 @@ class OAIInferenceClient(InferenceClient):
                             out += data["choices"][0]["delta"]["content"]
                             yield data["choices"][0]["delta"]["content"]
                         elif data.get("usage"):
-                            self._account_input_tokens(data["usage"]["prompt_tokens"])
+                            self._cost.input_tokens += data["usage"]["prompt_tokens"]
                             # No reference to cached tokens in the docs for the streaming API response objects...
-                            opentelemetry.trace.get_current_span().set_attribute(
-                                "inference.usage.cached_input_tokens",
+                            self._cost.cache_read_input_tokens += (
                                 data["usage"]
                                 .get("prompt_tokens_details", {})
-                                .get("cached_tokens", 0),
+                                .get("cached_tokens", 0)
                             )
-                            self._account_output_tokens(
-                                data["usage"]["completion_tokens"]
-                            )
+                            self._cost.output_tokens += data["usage"][
+                                "completion_tokens"
+                            ]
 
                 await self._trace(
                     request.messages,
@@ -1386,10 +1375,10 @@ class OAIInferenceClient(InferenceClient):
                                 except ValueError:
                                     pass
                         if data.get("usage"):
-                            self._account_input_tokens(data["usage"]["prompt_tokens"])
-                            self._account_output_tokens(
-                                data["usage"]["completion_tokens"]
-                            )
+                            self._cost.input_tokens += data["usage"]["prompt_tokens"]
+                            self._cost.output_tokens += data["usage"][
+                                "completion_tokens"
+                            ]
 
 
 class OpenRouterInferenceClient(OAIInferenceClient):
@@ -1576,10 +1565,10 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                                 except ValueError:
                                     pass
                         if data.get("usage"):
-                            self._account_input_tokens(data["usage"]["prompt_tokens"])
-                            self._account_output_tokens(
-                                data["usage"]["completion_tokens"]
-                            )
+                            self._cost.input_tokens += data["usage"]["prompt_tokens"]
+                            self._cost.output_tokens += data["usage"][
+                                "completion_tokens"
+                            ]
 
 
 class VertexInferenceClient(InferenceClient):
@@ -1635,8 +1624,8 @@ class VertexInferenceClient(InferenceClient):
         except google.api_core.exceptions.ServerError:
             raise InferenceException("server_error")
 
-        self._account_input_tokens(resp.usage_metadata.prompt_token_count)
-        self._account_output_tokens(resp.usage_metadata.candidates_token_count)
+        self._cost.input_tokens += resp.usage_metadata.prompt_token_count
+        self._cost.output_tokens += resp.usage_metadata.candidates_token_count
 
         await self._trace(
             [
@@ -1679,8 +1668,8 @@ class VertexInferenceClient(InferenceClient):
             out += chunk.text
             yield chunk.text
             if chunk.usage_metadata:
-                self._account_input_tokens(chunk.usage_metadata.prompt_token_count)
-                self._account_output_tokens(chunk.usage_metadata.candidates_token_count)
+                self._cost.input_tokens += chunk.usage_metadata.prompt_token_count
+                self._cost.output_tokens += chunk.usage_metadata.candidates_token_count
 
         await self._trace(
             [
