@@ -138,7 +138,9 @@ class InferenceClient(ABC):
         max_iterations=10,
         tool_choice="any",
         middlewares: List[Callable[[dict[str, Any]], Awaitable[None]]] = [],
-        mode_swap_callback: any = None
+        mode_swap_callback: Optional[
+            Callable[[], Awaitable[tuple[str, List[Tuple[Callable, Dict[str, Any]]]]]]
+        ] = None,
     ):
         tools[-1][1]["cache_control"] = {"type": "ephemeral"}
 
@@ -154,7 +156,6 @@ class InferenceClient(ABC):
             for msg in messages
         ]
 
-
         for _ in range(max_iterations):
             if mode_swap_callback and len(serialized_messages) > 2:
                 prompt, tools = await mode_swap_callback()
@@ -162,7 +163,9 @@ class InferenceClient(ABC):
                 tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
                 if prompt:
-                    serialized_messages[0]["content"] = [{"type": "text", "text": prompt}]
+                    serialized_messages[0]["content"] = [
+                        {"type": "text", "text": prompt}
+                    ]
 
             for retry in range(1, 5):
                 try:
@@ -196,6 +199,7 @@ class InferenceClient(ABC):
                 except Exception as e:
                     print("generic inference exception", e)
                     import traceback
+
                     traceback.print_exc()
 
                     await asyncio.sleep(3**retry)
@@ -212,7 +216,17 @@ class InferenceClient(ABC):
             )
 
             if not calls:
-                serialized_messages.append({"role": "user", "content": [{"type": "text", "text": "You did not correctly make a tool call. Please make a tool call from your available tools."}]})
+                serialized_messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "You did not correctly make a tool call. Please make a tool call from your available tools.",
+                            }
+                        ],
+                    }
+                )
                 continue
 
             content_blocks = []
