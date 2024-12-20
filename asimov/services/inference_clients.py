@@ -1153,7 +1153,7 @@ class OAIInferenceClient(InferenceClient):
 
             body: dict = response.json()
 
-            self._cost.input_tokens += body["usage"]["input_tokens"]
+            self._cost.input_tokens += body["usage"]["prompt_tokens"]
             self._cost.cache_read_input_tokens += (
                 body["usage"].get("prompt_tokens_details", {}).get("cached_tokens", 0)
             )
