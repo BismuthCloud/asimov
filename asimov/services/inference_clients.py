@@ -119,7 +119,7 @@ class InferenceClient(ABC):
         serialized_messages: List[Dict[str, Any]],
         tools: List[Tuple[Callable, Dict[str, Any]]],
         system: Optional[str] = None,
-        max_tokens=8192,
+        max_tokens=1024,
         top_p=0.9,
         temperature=0.5,
         tool_choice="any",
@@ -132,7 +132,7 @@ class InferenceClient(ABC):
         self,
         messages: List[ChatMessage],
         tools: List[Tuple[Callable, Dict[str, Any]]],
-        max_tokens=8192,
+        max_tokens=1024,
         top_p=0.9,
         temperature=0.5,
         max_iterations=10,
@@ -154,13 +154,15 @@ class InferenceClient(ABC):
             for msg in messages
         ]
 
+
         for _ in range(max_iterations):
             if mode_swap_callback and len(serialized_messages) > 2:
                 prompt, tools = await mode_swap_callback()
                 tools[-1][1]["cache_control"] = {"type": "ephemeral"}
                 tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
-                serialized_messages[0]["content"] = [{"type": "text", "text": prompt}]
+                if prompt:
+                    serialized_messages[0]["content"] = [{"type": "text", "text": prompt}]
 
             for retry in range(1, 5):
                 try:
@@ -176,9 +178,6 @@ class InferenceClient(ABC):
                     )
 
                     calls = [c for c in resp if c["type"] == "tool_use"]
-
-                    if not calls:
-                        raise InferenceException("No tool calls returned: " + str(resp))
 
                     await self._trace(serialized_messages, resp)
                     break
@@ -196,9 +195,13 @@ class InferenceClient(ABC):
                     continue
                 except Exception as e:
                     print("generic inference exception", e)
+                    import traceback
+                    traceback.print_exc()
+
                     await asyncio.sleep(3**retry)
                     continue
             else:
+                print("Retries exceeded, bailing!")
                 raise RetriesExceeded()
 
             serialized_messages.append(
@@ -208,15 +211,19 @@ class InferenceClient(ABC):
                 }
             )
 
+            if not calls:
+                serialized_messages.append({"role": "user", "content": [{"type": "text", "text": "You did not correctly make a tool call. Please make a tool call from your available tools."}]})
+                continue
+
             content_blocks = []
             for call in calls:
                 try:
                     func = tool_funcs.get(call["name"])
 
                     if not func:
-                        return "This tool is not available please select and use an available tool."
-
-                    result = await func(call["input"])
+                        result = "This tool is not available please select and use an available tool."
+                    else:
+                        result = await func(call["input"])
                 except StopAsyncIteration:
                     return serialized_messages
 
@@ -241,9 +248,6 @@ class InferenceClient(ABC):
                     "type": "ephemeral"
                 }
 
-            # Artificially slow things down just a bit because perf with caching makes it easy to hit TPM limits
-            await asyncio.sleep(2)
-
         return serialized_messages
 
 
@@ -259,7 +263,7 @@ class BedrockInferenceClient(InferenceClient):
     async def get_generation(
         self,
         messages: List[ChatMessage],
-        max_tokens=8192,
+        max_tokens=1024,
         top_p=0.9,
         temperature=0.5,
     ):
@@ -313,7 +317,7 @@ class BedrockInferenceClient(InferenceClient):
     async def connect_and_listen(
         self,
         messages: List[ChatMessage],
-        max_tokens=8192,
+        max_tokens=1024,
         top_p=0.9,
         temperature=0.5,
     ):
@@ -383,7 +387,7 @@ class BedrockInferenceClient(InferenceClient):
         serialized_messages: List[Dict[str, Any]],
         tools: List[Tuple[Callable, Dict[str, Any]]],
         system: Optional[str] = None,
-        max_tokens=8192,
+        max_tokens=1024,
         top_p=0.9,
         temperature=0.5,
         tool_choice="any",
@@ -496,7 +500,7 @@ class AnthropicInferenceClient(InferenceClient):
     @tracer.start_as_current_span(name="AnthropicInferenceClient.get_generation")
     @backoff.on_exception(backoff.expo, InferenceException, max_time=60)
     async def get_generation(
-        self, messages: List[ChatMessage], max_tokens=8192, top_p=0.9, temperature=0.5
+        self, messages: List[ChatMessage], max_tokens=1024, top_p=0.9, temperature=0.5
     ):
         system = None
         if messages[0].role == ChatRole.SYSTEM:
@@ -563,7 +567,7 @@ class AnthropicInferenceClient(InferenceClient):
 
     @tracer.start_as_current_span(name="AnthropicInferenceClient.connect_and_listen")
     async def connect_and_listen(
-        self, messages: List[ChatMessage], max_tokens=8192, top_p=0.9, temperature=0.5
+        self, messages: List[ChatMessage], max_tokens=1024, top_p=0.9, temperature=0.5
     ):
 
         system = None
@@ -661,7 +665,7 @@ class AnthropicInferenceClient(InferenceClient):
         serialized_messages,
         tools,
         system=None,
-        max_tokens=8192,
+        max_tokens=1024,
         top_p=0.9,
         temperature=0.5,
         tool_choice="any",
@@ -826,7 +830,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
         self,
         serialized_messages,
         tools,
-        max_tokens=8192,
+        max_tokens=1024,
         top_p=0.9,
         system=None,
         temperature=0.5,
@@ -1234,7 +1238,7 @@ class OAIInferenceClient(InferenceClient):
         serialized_messages,
         tools,
         system=None,
-        max_tokens=8192,
+        max_tokens=1024,
         top_p=0.9,
         temperature=0.5,
         tool_choice="any",
@@ -1408,7 +1412,7 @@ class OpenRouterInferenceClient(OAIInferenceClient):
         serialized_messages,
         tools,
         system=None,
-        max_tokens=8192,
+        max_tokens=1024,
         top_p=0.9,
         temperature=0.5,
         tool_choice="any",
