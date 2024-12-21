@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Hashable
 import botocore.exceptions
 from pydantic import Field, PrivateAttr
 from pydantic.fields import PydanticUndefined
@@ -141,7 +142,7 @@ class InferenceClient(ABC):
         middlewares: List[Callable[[dict[str, Any]], Awaitable[None]]] = [],
         mode_swap_callback: Optional[
             Callable[
-                [], Awaitable[tuple[str, List[Tuple[Callable, Dict[str, Any]]], str]]
+                [], Awaitable[tuple[str, List[Tuple[Callable, Dict[str, Any]]], Hashable]]
             ]
         ] = None,
     ):
@@ -149,7 +150,7 @@ class InferenceClient(ABC):
         if mode_swap_callback:
             _, _, mode = await mode_swap_callback()
 
-        last_mode_cached_message = {}
+        last_mode_cached_message: dict[Hashable, int] = {}
 
         tools[-1][1]["cache_control"] = {"type": "ephemeral"}
 
@@ -189,8 +190,6 @@ class InferenceClient(ABC):
             serialized_messages[-1]["content"][-1]["cache_control"] = {
                 "type": "ephemeral"
             }
-            print(mode)
-            print(last_mode_cached_message)
             last_mode_cached_message[mode] = len(serialized_messages) - 1
 
             for retry in range(1, 5):
