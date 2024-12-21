@@ -77,7 +77,6 @@ class InferenceCost(AsimovBase):
 
 class InferenceClient(ABC):
     model: str
-    _last_mode: Optional[any] = None
     _trace_id: int = 0
     trace_cb: Optional[
         Callable[
@@ -141,16 +140,18 @@ class InferenceClient(ABC):
         tool_choice="any",
         middlewares: List[Callable[[dict[str, Any]], Awaitable[None]]] = [],
         mode_swap_callback: Optional[
-            Callable[[], Awaitable[tuple[str, List[Tuple[Callable, Dict[str, Any]]]]]]
+            Callable[
+                [], Awaitable[tuple[str, List[Tuple[Callable, Dict[str, Any]]], str]]
+            ]
         ] = None,
     ):
-        last_mode_cached_message = {}
-        tools[-1][1]["cache_control"] = {"type": "ephemeral"}
-        mode = self._last_mode
-        mode_count = 1
+        mode = None
+        if mode_swap_callback:
+            _, _, mode = await mode_swap_callback()
 
-        if not mode_swap_callback:
-            last_mode_cached_message[None] = 0
+        last_mode_cached_message = {}
+
+        tools[-1][1]["cache_control"] = {"type": "ephemeral"}
 
         tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
@@ -165,42 +166,32 @@ class InferenceClient(ABC):
         ]
 
         for _ in range(max_iterations):
-            if mode_swap_callback and self._last_mode is None:
-                print("No last mode")
-                _, _, mode = await mode_swap_callback()
-                print(mode)
+            for msg in serialized_messages:
+                msg["content"][-1].pop("cache_control", None)
 
-                for i, msg in enumerate(serialized_messages):
-                    if msg["content"][-1].get("cache_control"):
-                        last_mode_cached_message[mode] = i
-
-                self._last_mode = mode
-            elif mode_swap_callback and len(serialized_messages) > 2:
+            if mode_swap_callback and len(serialized_messages) > 2:
                 print("Mode swap called")
                 prompt, tools, mode = await mode_swap_callback()
-                print(mode)
 
                 tools[-1][1]["cache_control"] = {"type": "ephemeral"}
                 tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
-
-                if mode != self._last_mode:
-                    for i, msg in enumerate(serialized_messages):
-                        if msg["content"][-1].pop("cache_control", None):
-                            last_mode_cached_message[self._last_mode] = i
-
-                    index = last_mode_cached_message.get(mode, -1)
-                    
-                    serialized_messages[index]["content"][-1][
-                        "cache_control"
-                    ] = {
-                        "type": "ephemeral"
-                    }
-                    mode_count = 0
 
                 if prompt:
                     serialized_messages[0]["content"] = [
                         {"type": "text", "text": prompt}
                     ]
+
+            if mode in last_mode_cached_message:
+                serialized_messages[last_mode_cached_message[mode]]["content"][-1][
+                    "cache_control"
+                ] = {"type": "ephemeral"}
+
+            serialized_messages[-1]["content"][-1]["cache_control"] = {
+                "type": "ephemeral"
+            }
+            print(mode)
+            print(last_mode_cached_message)
+            last_mode_cached_message[mode] = len(serialized_messages) - 1
 
             for retry in range(1, 5):
                 try:
@@ -290,20 +281,6 @@ class InferenceClient(ABC):
                     "content": content_blocks,
                 }
             )
-            print(mode)
-            print(self._last_mode)
-            print(last_mode_cached_message)
-            print(mode_count)
-
-            if mode_count > 5:
-                serialized_messages[last_mode_cached_message[mode]]["content"][-1].pop("cache_control", None)
-                serialized_messages[-1]["content"][-1]["cache_control"] = {
-                    "type": "ephemeral"
-                }
-
-                last_mode_cached_message[mode] = len(serialized_messages) - 1
-
-            self._last_mode = mode
         return serialized_messages
 
 
