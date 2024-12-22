@@ -74,6 +74,8 @@ class InferenceCost(AsimovBase):
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
     cache_write_input_tokens: int = 0
+    # Dollar amount that should be added on to the cost of the request
+    dollar_adjust: float = 0.0
 
 
 class InferenceClient(ABC):
@@ -85,21 +87,25 @@ class InferenceClient(ABC):
             Awaitable[None],
         ]
     ] = None
-    _cost: InferenceCost = InferenceCost()
+    _cost: InferenceCost
+
+    def __init__(self):
+        self._cost = InferenceCost()
 
     async def _trace(self, request, response):
+        opentelemetry.trace.get_current_span().set_attribute(
+            "inference.usage.input_tokens", self._cost.input_tokens
+        )
+        opentelemetry.trace.get_current_span().set_attribute(
+            "inference.usage.cached_input_tokens",
+            self._cost.cache_read_input_tokens,
+        )
+        opentelemetry.trace.get_current_span().set_attribute(
+            "inference.usage.output_tokens", self._cost.output_tokens
+        )
+
         if self.trace_cb:
             await self.trace_cb(self._trace_id, request, response, self._cost)
-            opentelemetry.trace.get_current_span().set_attribute(
-                "inference.usage.input_tokens", self._cost.input_tokens
-            )
-            opentelemetry.trace.get_current_span().set_attribute(
-                "inference.usage.cached_input_tokens",
-                self._cost.cache_read_input_tokens,
-            )
-            opentelemetry.trace.get_current_span().set_attribute(
-                "inference.usage.output_tokens", self._cost.output_tokens
-            )
             self._cost = InferenceCost()
             self._trace_id += 1
 
@@ -142,7 +148,8 @@ class InferenceClient(ABC):
         middlewares: List[Callable[[dict[str, Any]], Awaitable[None]]] = [],
         mode_swap_callback: Optional[
             Callable[
-                [], Awaitable[tuple[str, List[Tuple[Callable, Dict[str, Any]]], Hashable]]
+                [],
+                Awaitable[tuple[str, List[Tuple[Callable, Dict[str, Any]]], Hashable]],
             ]
         ] = None,
     ):
@@ -285,6 +292,7 @@ class InferenceClient(ABC):
 
 class BedrockInferenceClient(InferenceClient):
     def __init__(self, model: str, region_name="us-east-1"):
+        super().__init__()
         self.model = model
         self.region_name = region_name
         self.session = aioboto3.Session()
@@ -525,6 +533,7 @@ class AnthropicInferenceClient(InferenceClient):
         api_key: str,
         api_url: str = "https://api.anthropic.com/v1/messages",
     ):
+        super().__init__()
         self.model = model
         self.api_url = api_url
         self.api_key = api_key
@@ -854,6 +863,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
         model: str,
         api_key: str,
     ):
+        super().__init__()
         self.client = genai.Client(api_key=api_key)
         self.model = model
 
@@ -1137,6 +1147,7 @@ class OAIInferenceClient(InferenceClient):
         api_key: str,
         api_url: str = "https://api.openai.com/v1/chat/completions",
     ):
+        super().__init__()
         self.model = model
         self.api_url = api_url
         self.api_key = api_key
@@ -1438,6 +1449,34 @@ class OpenRouterInferenceClient(OAIInferenceClient):
             api_url="https://openrouter.ai/api/v1/chat/completions",
         )
 
+    async def _populate_cost(self, id: str):
+        await asyncio.sleep(0.5)
+        async with httpx.AsyncClient() as client:
+            for _ in range(3):
+                response = await client.get(
+                    f"https://openrouter.ai/api/v1/generation?id={id}",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                )
+
+                if response.status_code == 404:
+                    await asyncio.sleep(0.5)
+                    continue
+
+                if response.status_code != 200:
+                    print(response.status_code, await response.aread())
+                    await asyncio.sleep(0.5)
+                    continue
+
+                body: dict = response.json()
+
+                self._cost.input_tokens += body["data"]["native_tokens_prompt"]
+                self._cost.output_tokens += body["data"]["native_tokens_completion"]
+                self._cost.dollar_adjust += -body["data"]["cache_discount"]
+                return
+
     @tracer.start_as_current_span(name="OpenRouterInferenceClient._tool_chain_stream")
     async def _tool_chain_stream(
         self,
@@ -1568,14 +1607,18 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                 elif response.status_code != 200:
                     raise InferenceException(await response.aread())
 
+                id = None
                 text_block = None
                 tool_call_blocks = []
 
                 async for line in response.aiter_lines():
                     if line == "data: [DONE]":
+                        await self._populate_cost(id)
                         return ([text_block] if text_block else []) + tool_call_blocks
                     if line.startswith("data: "):
                         data = json.loads(line[6:])
+                        if "id" in data:
+                            id = data["id"]
                         if data.get("error"):
                             raise InferenceException(data["error"]["message"])
                         if data["choices"]:
@@ -1613,15 +1656,11 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                                         await middleware(tool_call_blocks[tc["index"]])
                                 except ValueError:
                                     pass
-                        if data.get("usage"):
-                            self._cost.input_tokens += data["usage"]["prompt_tokens"]
-                            self._cost.output_tokens += data["usage"][
-                                "completion_tokens"
-                            ]
 
 
 class VertexInferenceClient(InferenceClient):
     def __init__(self, model: str):
+        super().__init__()
         self.model = model
 
     @tracer.start_as_current_span(name="VertexInferenceClient.get_generation")
