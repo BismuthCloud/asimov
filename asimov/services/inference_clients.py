@@ -178,7 +178,6 @@ class InferenceClient(ABC):
                 msg["content"][-1].pop("cache_control", None)
 
             if mode_swap_callback and len(serialized_messages) > 2:
-                print("Mode swap called")
                 prompt, tools, mode = await mode_swap_callback()
 
                 tools[-1][1]["cache_control"] = {"type": "ephemeral"}
@@ -1474,7 +1473,7 @@ class OpenRouterInferenceClient(OAIInferenceClient):
 
                 self._cost.input_tokens += body["data"]["native_tokens_prompt"]
                 self._cost.output_tokens += body["data"]["native_tokens_completion"]
-                self._cost.dollar_adjust += -body["data"]["cache_discount"]
+                self._cost.dollar_adjust += -(body["data"]["cache_discount"] or 0)
                 return
 
     @tracer.start_as_current_span(name="OpenRouterInferenceClient._tool_chain_stream")
