@@ -110,7 +110,7 @@ class InferenceClient(ABC):
             self._trace_id += 1
 
     @abstractmethod
-    async def connect_and_listen(
+    def connect_and_listen(
         self, messages: List[ChatMessage], max_tokens=4096, top_p=0.9, temperature=0.5
     ) -> AsyncGenerator[str, None]:
         pass
