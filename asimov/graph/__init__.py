@@ -103,7 +103,7 @@ class AgentModule(AsimovBase):
 
     async def process(
         self, cache: Cache, semaphore: asyncio.Semaphore
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | AsyncGenerator:
         raise NotImplementedError
 
     def is_success(self, result: Dict[str, Any]) -> bool:
@@ -385,7 +385,7 @@ class Agent(AsimovBase):
     error_mailbox: str = "agent_error"
     execution_state: ExecutionState = Field(default_factory=ExecutionState)
     auto_snapshot: bool = False
-    _logger: logging.Logger
+    _logger: logging.Logger = PrivateAttr()
     _snapshot_generation: int = 0
 
     @model_validator(mode="after")
