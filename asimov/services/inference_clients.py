@@ -4,7 +4,7 @@ import botocore.exceptions
 from pydantic import Field, PrivateAttr
 from pydantic.fields import PydanticUndefined
 import json
-from typing import Awaitable, Callable, List, Dict, Any, Optional, Tuple
+from typing import Awaitable, Callable, List, Dict, Any, Optional, Tuple, AsyncGenerator
 from enum import Enum
 from abc import ABC, abstractmethod
 
@@ -112,7 +112,7 @@ class InferenceClient(ABC):
     @abstractmethod
     async def connect_and_listen(
         self, messages: List[ChatMessage], max_tokens=4096, top_p=0.9, temperature=0.5
-    ):
+    ) -> AsyncGenerator[str, None]:
         pass
 
     @abstractmethod
