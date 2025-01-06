@@ -176,12 +176,14 @@ class InferenceClient(ABC):
         for _ in range(max_iterations):
             for msg in serialized_messages:
                 msg["content"][-1].pop("cache_control", None)
-
             if mode_swap_callback and len(serialized_messages) > 2:
+                tools[-1][1].pop("cache_control", None)
                 prompt, tools, mode = await mode_swap_callback()
 
                 tools[-1][1]["cache_control"] = {"type": "ephemeral"}
                 tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
+
+                print([t[1].get("cache_control") for t in tools])
 
                 if prompt:
                     serialized_messages[0]["content"] = [
@@ -196,6 +198,8 @@ class InferenceClient(ABC):
             serialized_messages[-1]["content"][-1]["cache_control"] = {
                 "type": "ephemeral"
             }
+
+            print([msg["content"][-1].get("cache_control") for msg in serialized_messages])
             last_mode_cached_message[mode] = len(serialized_messages) - 1
 
             for retry in range(1, 5):
