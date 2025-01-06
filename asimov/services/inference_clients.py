@@ -183,8 +183,6 @@ class InferenceClient(ABC):
                 tools[-1][1]["cache_control"] = {"type": "ephemeral"}
                 tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
-                print([t[1].get("cache_control") for t in tools])
-
                 if prompt:
                     serialized_messages[0]["content"] = [
                         {"type": "text", "text": prompt}
@@ -199,7 +197,6 @@ class InferenceClient(ABC):
                 "type": "ephemeral"
             }
 
-            print([msg["content"][-1].get("cache_control") for msg in serialized_messages])
             last_mode_cached_message[mode] = len(serialized_messages) - 1
 
             for retry in range(1, 5):
