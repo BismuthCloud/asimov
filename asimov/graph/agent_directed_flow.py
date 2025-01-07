@@ -1,6 +1,6 @@
 import textwrap
 import logging
-from typing import List, Dict, Any, Sequence
+from typing import List, Dict, Any, Sequence, Optional
 from pydantic import Field, PrivateAttr, model_validator
 import json
 import asyncio
@@ -55,6 +55,7 @@ class AgentDrivenFlowDecision(FlowDecision):
 
 class AgentDrivenFlowControlConfig(FlowControlConfig):  # type: ignore[override]
     decisions: Sequence[AgentDrivenFlowDecision]
+    default: Optional[str] = None
 
 
 class AgentDirectedFlowControl(FlowControlModule):  # type: ignore[override]
@@ -189,17 +190,27 @@ Description of the system: {self.system_description}
             votes = await cache.get("votes", [])
 
         print(votes)
-        voted_choice = self.most_common_string(votes)
+        if votes:
+            voted_choice = self.most_common_string(votes)
 
-        for decision in self.flow_config.decisions:
-            if decision.next_node.lower() == voted_choice.lower():
-                self._logger.info(f"agent directed flow decision: {decision.next_node}")
-                return {
-                    "status": "success",
-                    "cleanup": decision.cleanup_on_jump,
-                    "decision": decision.next_node,
-                    "metadata": decision.metadata,
-                }
+            for decision in self.flow_config.decisions:
+                if decision.next_node.lower() == voted_choice.lower():
+                    self._logger.info(f"agent directed flow decision: {decision.next_node}")
+                    return {
+                        "status": "success",
+                        "cleanup": decision.cleanup_on_jump,
+                        "decision": decision.next_node,
+                        "metadata": decision.metadata,
+                    }
+
+        if self.flow_config.default:
+            self._logger.info(f"Using default decision: {self.flow_config.default}")
+            return {
+                "status": "success",
+                "cleanup": True,
+                "decision": self.flow_config.default,
+                "metadata": {},
+            }
 
         # If no decisions were met, fall through
         self._logger.warning("No agent directed flow decision was met, falling through")
