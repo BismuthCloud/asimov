@@ -25,6 +25,21 @@ jobs:
           docker run --rm -d -p 6379:6379 redis
           hatch test -- -vv -s --log-cli-level DEBUG
 
+  mypy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install hatch
+        run: |
+          pip install hatch
+
       - name: Run mypy
         run: |
           hatch run types:check

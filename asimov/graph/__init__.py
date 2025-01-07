@@ -1,3 +1,4 @@
+from abc import abstractmethod
 import asyncio
 from enum import Enum
 import jsonpickle
@@ -7,7 +8,7 @@ import pickle
 import re
 import logging
 import opentelemetry.trace
-from typing import List, Dict, Any, AsyncGenerator, Optional, Sequence
+from typing import Awaitable, List, Dict, Any, AsyncGenerator, Optional, Sequence
 from typing_extensions import TypedDict
 from pydantic import (
     Field,
@@ -101,9 +102,9 @@ class AgentModule(AsimovBase):
 
         return output
 
-    async def process(
+    def process(
         self, cache: Cache, semaphore: asyncio.Semaphore
-    ) -> dict[str, Any] | AsyncGenerator:
+    ) -> Awaitable[dict[str, Any]] | AsyncGenerator:
         raise NotImplementedError
 
     def is_success(self, result: Dict[str, Any]) -> bool:
