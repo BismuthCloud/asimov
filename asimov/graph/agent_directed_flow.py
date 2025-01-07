@@ -15,8 +15,24 @@ from asimov.graph import (
 )
 from asimov.services.inference_clients import InferenceClient, ChatMessage, ChatRole
 
-from asimov.constants import ModelFamily
-from asimov.utils.models import is_model_family, prepare_model_generation_input
+MAKE_DECISION_SCHEMA = {
+    "name": "make_decision",
+    "description": "Make decision about what choice to make from the provided options in the prompt.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "thoughts": {
+                "type": "string",
+                "description": "Your thoughts about why you are making the decsiion you are mkaing regarding the possible choices available.",
+            },
+            "decision": {
+                "type": "string",
+                "description": "A phrase to search for exact case sensitive matches over the codebase.",
+            },
+        },
+        "required": ["decision"],
+    },
+}
 
 
 class Example:
@@ -37,11 +53,11 @@ class AgentDrivenFlowDecision(FlowDecision):
     examples: List[Example] = Field(default_factory=list)
 
 
-class AgentDrivenFlowControlConfig(FlowControlConfig):
+class AgentDrivenFlowControlConfig(FlowControlConfig):  # type: ignore[override]
     decisions: Sequence[AgentDrivenFlowDecision]
 
 
-class AgentDirectedFlowControl(FlowControlModule):
+class AgentDirectedFlowControl(FlowControlModule):  # type: ignore[override]
     inference_client: InferenceClient
     system_description: str
     flow_config: AgentDrivenFlowControlConfig
@@ -82,59 +98,36 @@ Description of the system: {self.system_description}
 {"\n".join(examples)}
 </EXAMPLES>"""
 
+        return self
+
     def most_common_string(self, string_list):
         return max(set(string_list), key=string_list.count)
 
-    async def gen_loop(self, x, generation_input, generation_pretext):
-        """A function to handle regeneration for bad json, all because the LLM would randomly not generate correct JSON and simply regenerating did not get there."""
-        await asyncio.sleep(x * 0.1)
-        while True:
-            try:
-                generation = await self.inference_client.get_generation(
-                    generation_input,
-                )
-                if is_model_family(self.inference_client, [ModelFamily.ANTHROPIC]):
-                    generation = generation_pretext + generation
+    async def gen(self, generation_input, cache):
+        async def make_decision(resp):
+            print(dict(resp))
+            async with cache.with_suffix(self.name):
+                votes = await cache.get("votes", [])
+                votes.append(resp["decision"].lower())
 
-                generation = generation[: generation.rfind("}") + 1]
-                self._logger.info(f"DECISION GENERATION: {generation}")
-                decision_choice = json.loads(generation)
-                decision_choice = decision_choice["choice"].strip()
+                await cache.set("votes", votes)
 
-                return decision_choice
-            except json.JSONDecodeError as e:
-                print(generation)
-                if is_model_family(self.inference_client, [ModelFamily.ANTHROPIC]):
-                    generation_input = generation_input[:-1]
+            return dict(resp)
 
-                generation_input.append(
-                    ChatMessage(role=ChatRole.ASSISTANT, content=generation)
-                )
-                generation_input.append(
-                    ChatMessage(
-                        role=ChatRole.USER,
-                        content="Sorry that was not valid JSON try again. Please only generate JSON. Remember you need the escape sequence newline characters in json and not linebreaks.",
-                    )
-                )
-
-                if generation_pretext:
-                    generation_input.append(
-                        ChatMessage(
-                            role=ChatRole.ASSISTANT,
-                            content=generation_pretext,
-                            model_families=[ModelFamily.ANTHROPIC],
-                        )
-                    )
-
-                generation_input = prepare_model_generation_input(
-                    generation_input, self.inference_client
-                )
-
-                print(generation_input)
+        await self.inference_client.tool_chain(
+            messages=generation_input,
+            top_p=0.9,
+            tool_choice="any",
+            temperature=0,
+            max_iterations=1,
+            tools=[
+                (make_decision, MAKE_DECISION_SCHEMA),
+            ],
+        )
 
     async def run(self, cache: Cache, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
         self._logger = logging.getLogger(__name__).getChild(
-            await cache.get("request_id", "task_logger")
+            await cache.get("request_id")
         )
 
         message = await cache.get(self.input_var)
@@ -186,34 +179,14 @@ Description of the system: {self.system_description}
             ),
         ]
 
-        generation_pretext = None
+        tasks = []
+        for _ in range(0, self.voters):
+            tasks.append(self.gen(generation_input, cache))
 
-        if is_model_family(self.inference_client, [ModelFamily.ANTHROPIC]):
-            generation_pretext = '{"choice": "'
-            generation_input.append(
-                ChatMessage(
-                    role=ChatRole.ASSISTANT,
-                    content=generation_pretext,
-                ),
-            )
+        await asyncio.gather(*tasks)
 
-        votes = []
-
-        # Occasionally the llm messes up the JSON so just retry.
-        while True:
-            try:
-                tasks = []
-                for x in range(0, self.voters):
-                    tasks.append(self.gen_loop(x, generation_input, generation_pretext))
-
-                votes = await asyncio.gather(*tasks)
-
-                break
-            except json.JSONDecodeError as e:
-                self._logger.warning(f"JSON DECODE ERROR: {e}")
-                pass
-
-        votes = list(map(lambda x: x.lower(), votes))
+        async with cache.with_suffix(self.name):
+            votes = await cache.get("votes", [])
 
         print(votes)
         voted_choice = self.most_common_string(votes)
