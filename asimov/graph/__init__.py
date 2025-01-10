@@ -718,7 +718,7 @@ class Agent(AsimovBase):
                     break
                 retries += 1
 
-        print(f"Node {node_name} failed after {node.node_config.max_retries} attempts")
+        print(f"Node {node_name} failed after {retries} attempts")
 
         if not result:
             result = {"status": "error", "result": str(last_exception)}
