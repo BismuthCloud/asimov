@@ -20,6 +20,7 @@ from google import genai
 from google.genai import types
 
 from asimov.asimov_base import AsimovBase
+from asimov.graph import NonRetryableException
 
 tracer = opentelemetry.trace.get_tracer(__name__)
 opentelemetry.instrumentation.httpx.HTTPXClientInstrumentor().instrument()
@@ -219,6 +220,9 @@ class InferenceClient(ABC):
                 except ValueError as e:
                     print(f"ValueError hit ({e}), bailing")
                     return serialized_messages
+                except NonRetryableException:
+                    print("Non-retryable exception hit, bailing")
+                    raise
                 except InferenceException as e:
                     print("inference exception", e)
                     await asyncio.sleep(3**retry)

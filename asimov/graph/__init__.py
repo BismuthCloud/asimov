@@ -28,12 +28,13 @@ lua = LuaRuntime(unpack_returned_tuples=True)  # type: ignore[call-arg]
 tracer = opentelemetry.trace.get_tracer("asimov")
 
 
-class TasksFinished(Exception):
-    """Exception raised when we want to stop after one success."""
+class NonRetryableException(Exception):
+    """
+    An exception which, when raised within a module, will prevent the module from being retried
+    regardless of the retry_on_failure configuration.
+    """
 
-    def __init__(self, message=""):
-        self.message = message
-        super().__init__(self.message)
+    pass
 
 
 class ModuleType(Enum):
@@ -713,6 +714,8 @@ class Agent(AsimovBase):
                 self._logger.exception(
                     f"Error in node {node_name} (attempt {retries + 1}/{node.node_config.max_retries})"
                 )
+                if isinstance(e, NonRetryableException):
+                    break
                 retries += 1
 
         print(f"Node {node_name} failed after {node.node_config.max_retries} attempts")
