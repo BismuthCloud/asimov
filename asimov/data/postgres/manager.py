@@ -44,28 +44,37 @@ class DatabaseManager:
             self.connection_pool.putconn(conn)
 
     @contextlib.contextmanager
-    def get_cursor(self):
+    def get_cursor(self, commit=True):
         with self.get_connection() as conn:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             try:
                 yield cursor
             finally:
-                conn.commit()
+                if commit:
+                    conn.commit()
+                else:
+                    conn.rollback()
                 cursor.close()
 
-    def execute_query(self, query, params=None):
-        with self.get_cursor() as cursor:
-            cursor.execute(query, params)
-            if cursor.description:
-                return cursor.fetchall()
+    def execute_query(self, query, params=None, cursor=None):
+        with self.get_cursor() as cur:
+            if cursor is not None:
+                cur = cursor
+            cur.execute(query, params)
+            if cur.description:
+                return cur.fetchall()
             return None
 
-    def execute_and_fetch_one(self, query, params=None):
-        with self.get_cursor() as cursor:
-            cursor.execute(query, params)
-            return cursor.fetchone()
+    def execute_and_fetch_one(self, query, params=None, cursor=None):
+        with self.get_cursor() as cur:
+            if cursor is not None:
+                cur = cursor
+            cur.execute(query, params)
+            return cur.fetchone()
 
-    def execute_and_return_id(self, query, params=None):
-        with self.get_cursor() as cursor:
-            cursor.execute(query, params)
-            return cursor.fetchone()["id"]
+    def execute_and_return_id(self, query, params=None, cursor=None):
+        with self.get_cursor() as cur:
+            if cursor is not None:
+                cur = cursor
+            cur.execute(query, params)
+            return cur.fetchone()["id"]
