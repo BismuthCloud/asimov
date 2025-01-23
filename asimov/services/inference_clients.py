@@ -281,7 +281,7 @@ class InferenceClient(ABC):
                     {
                         "type": "tool_result",
                         "tool_use_id": call["id"],
-                        "content": result,
+                        "content": str(result),
                     }
                 )
 
