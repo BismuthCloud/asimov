@@ -1,12 +1,12 @@
 import asyncio
 from collections.abc import Hashable
 import botocore.exceptions
-from pydantic import Field, PrivateAttr
-from pydantic.fields import PydanticUndefined
+from pydantic import Field
 import json
 from typing import Awaitable, Callable, List, Dict, Any, Optional, Tuple, AsyncGenerator
 from enum import Enum
 from abc import ABC, abstractmethod
+import logging
 
 import aioboto3
 import httpx
@@ -1200,11 +1200,16 @@ class OAIInferenceClient(InferenceClient):
 
             body: dict = response.json()
 
-            self._cost.input_tokens += body["usage"]["prompt_tokens"]
-            self._cost.cache_read_input_tokens += (
-                body["usage"].get("prompt_tokens_details", {}).get("cached_tokens", 0)
-            )
-            self._cost.output_tokens += body["usage"]["completion_tokens"]
+            try:
+                self._cost.input_tokens += body["usage"]["prompt_tokens"]
+                self._cost.cache_read_input_tokens += (
+                    body["usage"]
+                    .get("prompt_tokens_details", {})
+                    .get("cached_tokens", 0)
+                )
+                self._cost.output_tokens += body["usage"]["completion_tokens"]
+            except KeyError:
+                logging.warning(f"Malformed usage? {repr(body)}")
 
             await self._trace(
                 request["messages"],
