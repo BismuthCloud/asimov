@@ -1236,13 +1236,13 @@ class OAIInferenceClient(InferenceClient):
             temperature=temperature,
             stream=True,
             stream_options={"include_usage": True},
-        )
+        ).model_dump(exclude={"tools", "tool_choice"})
 
         async with httpx.AsyncClient() as client:
             async with client.stream(
                 "POST",
                 self.api_url,
-                json=request.__dict__,
+                json=request,
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
@@ -1261,7 +1261,9 @@ class OAIInferenceClient(InferenceClient):
                             break
                         data = json.loads(line[6:])
                         if "error" in data:
-                            raise InferenceException(data["error"]["message"])
+                            raise InferenceException(
+                                data["error"]["message"] + f" ({data['error']})"
+                            )
                         if data["choices"] and data["choices"][0]["delta"].get(
                             "content"
                         ):
@@ -1280,7 +1282,7 @@ class OAIInferenceClient(InferenceClient):
                             ]
 
                 await self._trace(
-                    request.messages,
+                    request["messages"],
                     [{"text": out}],
                 )
 
@@ -1629,7 +1631,9 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                         if "id" in data:
                             id = data["id"]
                         if data.get("error"):
-                            raise InferenceException(data["error"]["message"])
+                            raise InferenceException(
+                                data["error"]["message"] + f" ({data['error']})"
+                            )
                         if data["choices"]:
                             d = data["choices"][0]["delta"]
                             if d.get("content"):
