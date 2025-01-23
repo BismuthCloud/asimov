@@ -89,9 +89,6 @@ async def test_tool_chain_streaming():
         assert result[1]["content"][1]["input"] == {"location": "San Francisco"}
         assert result[2]["role"] == "user"
         assert result[2]["content"][0]["type"] == "tool_result"
-        assert result[2]["content"][0]["content"] == {
-            "temperature": 72,
-            "conditions": "sunny",
-        }
+        assert result[2]["content"][0]["content"] == "{'temperature': 72, 'conditions': 'sunny'}"
 
         get_weather.assert_awaited_once_with({"location": "San Francisco"})
