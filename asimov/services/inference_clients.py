@@ -213,6 +213,9 @@ class InferenceClient(ABC):
                         middlewares=middlewares,
                     )
 
+                    if not resp:
+                        raise InferenceException("no response blocks returned")
+
                     calls = [c for c in resp if c["type"] == "tool_use"]
 
                     await self._trace(serialized_messages, resp)
