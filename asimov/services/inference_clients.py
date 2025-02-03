@@ -1602,6 +1602,9 @@ class OpenRouterInferenceClient(OAIInferenceClient):
             "tools": openrouter_tools,
         }
 
+        if self.model in ["openai/o3-mini"]:
+            request["reasoning_effort"] = "high"
+
         async with httpx.AsyncClient() as client:
             async with client.stream(
                 "POST",
