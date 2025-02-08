@@ -24,11 +24,8 @@ Further documentation greatly appreciated in PRs!
 
 Asimov Agents is composed of three main components:
 
-1. **Task Graph System**
+1. **Graph Primitives**
    - Manages task execution flow and dependencies
-   - Supports different task states (WAITING, EXECUTING, COMPLETE, FAILED, PARTIAL)
-   - Uses Pydantic models for robust data validation
-   - Unique task identification via UUIDs
 
 2. **Inference Clients**
    - Supports multiple LLM providers:
@@ -36,6 +33,7 @@ Asimov Agents is composed of three main components:
      - AWS Bedrock
      - OpenAI (Including local models)
      - Vertex
+     - OpenRouter
    - Features:
      - Streaming responses
      - Tool/function calling capabilities
