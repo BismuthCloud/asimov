@@ -134,6 +134,18 @@ class InferenceClient(ABC):
         pass
 
     @abstractmethod
+    async def _unstructured_stream(
+        self,
+        serialized_messages,
+        system=None,
+        max_tokens=1024,
+        top_p=0.9,
+        temperature=0.5,
+        middlewares=[],
+    ):
+        pass
+
+    @abstractmethod
     async def _tool_chain_stream(
         self,
         serialized_messages: List[Dict[str, Any]],
@@ -151,7 +163,7 @@ class InferenceClient(ABC):
     async def tool_chain(
         self,
         messages: List[ChatMessage],
-        tools: List[Tuple[Callable, Dict[str, Any]]],
+        tools: List[Tuple[Callable, Dict[str, Any]]]=[],
         max_tokens=1024,
         top_p=0.9,
         temperature=0.5,
@@ -165,6 +177,7 @@ class InferenceClient(ABC):
             ]
         ] = None,
         fifo_ratio: Optional[float] = None,
+        tool_parser = None
     ):
         mode = None
         if mode_swap_callback:
@@ -172,7 +185,8 @@ class InferenceClient(ABC):
 
         last_mode_cached_message: dict[Hashable, int] = {}
 
-        tools[-1][1]["cache_control"] = {"type": "ephemeral"}
+        if not tool_parser:
+            tools[-1][1]["cache_control"] = {"type": "ephemeral"}
 
         tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
@@ -190,10 +204,14 @@ class InferenceClient(ABC):
             for msg in serialized_messages:
                 msg["content"][-1].pop("cache_control", None)
             if mode_swap_callback and len(serialized_messages) > 2:
-                tools[-1][1].pop("cache_control", None)
+                if not tool_parser:
+                    tools[-1][1].pop("cache_control", None)
+
                 prompt, tools, mode = await mode_swap_callback()
 
-                tools[-1][1]["cache_control"] = {"type": "ephemeral"}
+                if not tool_parser:
+                    tools[-1][1]["cache_control"] = {"type": "ephemeral"}
+
                 tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
                 if prompt:
@@ -252,21 +270,40 @@ class InferenceClient(ABC):
 
             for retry in range(1, 5):
                 try:
-                    resp = await self._tool_chain_stream(
-                        serialized_messages,
-                        tools,
-                        system=system,
-                        max_tokens=max_tokens,
-                        top_p=top_p,
-                        temperature=temperature,
-                        tool_choice=tool_choice,
-                        middlewares=middlewares,
-                    )
+                    if not tool_parser:
+                        resp = await self._tool_chain_stream(
+                            serialized_messages,
+                            tools,
+                            system=system,
+                            max_tokens=max_tokens,
+                            top_p=top_p,
+                            temperature=temperature,
+                            tool_choice=tool_choice,
+                            middlewares=middlewares,
+                        )
 
-                    if not resp:
-                        raise InferenceException("no response blocks returned")
+                        if not resp:
+                            raise InferenceException("no response blocks returned")
 
-                    calls = [c for c in resp if c["type"] == "tool_use"]
+                        calls = [c for c in resp if c["type"] == "tool_use"]
+                    else:
+                        resp = await self._unstructured_stream(
+                            serialized_messages,
+                            system=system,
+                            max_tokens=max_tokens,
+                            top_p=top_p,
+                            temperature=temperature,
+                            middlewares=middlewares,
+                        )
+
+                        if not resp:
+                            raise InferenceException("no response blocks returned")
+                        
+                        calls = tool_parser(resp[-1]["text"])
+
+                        if type(calls) is not list:
+                            calls = [calls]
+                        
 
                     await self._trace(serialized_messages, resp)
                     break
@@ -324,20 +361,32 @@ class InferenceClient(ABC):
                 try:
                     func = tool_funcs.get(call["name"])
 
+                    print(call["name"])
+
+                    print(func)
+
                     if not func:
                         result = "This tool is not available please select and use an available tool."
                     else:
                         result = await func(call["input"])
                 except StopAsyncIteration:
                     return serialized_messages
-
-                content_blocks.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": call["id"],
-                        "content": str(result),
-                    }
-                )
+                
+                if tool_parser:
+                    content_blocks.append(
+                        {
+                            "type": "text",
+                            "content": str(result),
+                        }
+                    )
+                else:
+                    content_blocks.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": call["id"],
+                            "content": str(result),
+                        }
+                    )
 
             serialized_messages.append(
                 {
@@ -1672,6 +1721,102 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                 self._cost.output_tokens += body["data"]["native_tokens_completion"]
                 self._cost.dollar_adjust += -(body["data"]["cache_discount"] or 0)
                 return
+            
+    @tracer.start_as_current_span(name="OpenRouterInferenceClient._unstructured_stream")
+    async def _unstructured_stream(
+        self,
+        serialized_messages,
+        system=None,
+        max_tokens=1024,
+        top_p=0.9,
+        temperature=0.5,
+        middlewares=[],
+    ):
+        if system:
+            serialized_messages = [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": system,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            ] + serialized_messages
+
+        openrouter_messages = []
+        for message in serialized_messages:
+            text = next(
+                (
+                    content
+                    for content in message["content"]
+                    if content["type"] == "text"
+                ),
+                None,
+            )
+            if not text.get("text"):
+                print(text)
+            message = {
+                "role": message["role"],
+                "content": text.get("content") or text.get("text"),
+            }
+            openrouter_messages.append(message.copy())
+
+        request = {
+            "model": self.model,
+            "messages": openrouter_messages,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
+            "temperature": temperature,
+            "stream": True,
+        }
+
+        if self.model in ["openai/o3-mini"]:
+            request["reasoning_effort"] = "high"
+
+        async with httpx.AsyncClient() as client:
+            async with client.stream(
+                "POST",
+                self.api_url,
+                json=request,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=60,
+            ) as response:
+                if response.status_code == 400:
+                    raise ValueError()
+                elif response.status_code != 200:
+                    raise InferenceException(await response.aread())
+
+                id = None
+                text_block = None
+
+                async for line in response.aiter_lines():
+                    if line == "data: [DONE]":
+                        await self._populate_cost(id)
+                        return ([text_block] if text_block else [])
+                    if line.startswith("data: "):
+                        data = json.loads(line[6:])
+                        if "id" in data:
+                            id = data["id"]
+                        if data.get("error"):
+                            raise InferenceException(
+                                data["error"]["message"] + f" ({data['error']})"
+                            )
+                        if data["choices"]:
+                            d = data["choices"][0]["delta"]
+                            if d.get("content"):
+                                if not text_block:
+                                    text_block = {
+                                        "type": "text",
+                                        "text": d["content"],
+                                    }
+                                else:
+                                    text_block["text"] += d["content"]
 
     @tracer.start_as_current_span(name="OpenRouterInferenceClient._tool_chain_stream")
     async def _tool_chain_stream(
