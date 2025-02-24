@@ -539,11 +539,13 @@ class AnthropicInferenceClient(InferenceClient):
         model: str,
         api_key: str,
         api_url: str = "https://api.anthropic.com/v1/messages",
+        thinking: Optional[int] = None,
     ):
         super().__init__()
         self.model = model
         self.api_url = api_url
         self.api_key = api_key
+        self.thinking = thinking
 
     @tracer.start_as_current_span(name="AnthropicInferenceClient.get_generation")
     @backoff.on_exception(backoff.expo, InferenceException, max_time=60)
@@ -580,6 +582,12 @@ class AnthropicInferenceClient(InferenceClient):
         if system:
             request.update(system)
 
+        if self.thinking:
+            request["thinking"] = {"type": "enabled", "budget_tokens": self.thinking}
+            request["max_tokens"] += self.thinking
+            request["temperature"] = 1
+            del request["top_p"]
+
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 self.api_url,
@@ -611,7 +619,7 @@ class AnthropicInferenceClient(InferenceClient):
 
             await self._trace(request["messages"], body["content"])
 
-            return body["content"][0]["text"]
+            return next(block["text"] for block in body["content"] if "text" in block)
 
     @tracer.start_as_current_span(name="AnthropicInferenceClient.connect_and_listen")
     async def connect_and_listen(
@@ -656,6 +664,12 @@ class AnthropicInferenceClient(InferenceClient):
 
         if system:
             request.update(system)
+
+        if self.thinking:
+            request["thinking"] = {"type": "enabled", "budget_tokens": self.thinking}
+            request["max_tokens"] += self.thinking
+            request["temperature"] = 1
+            del request["top_p"]
 
         async with httpx.AsyncClient() as client:
             async with client.stream(
@@ -738,6 +752,13 @@ class AnthropicInferenceClient(InferenceClient):
                 }
             ]
 
+        if self.thinking:
+            request["thinking"] = {"type": "enabled", "budget_tokens": self.thinking}
+            request["max_tokens"] += self.thinking
+            request["temperature"] = 1
+            del request["top_p"]
+            request["tool_choice"] = {"type": "auto"}
+
         current_content = []
         current_block: dict[str, Any] = {
             "type": None,
@@ -793,6 +814,13 @@ class AnthropicInferenceClient(InferenceClient):
                                 "input": {},
                             }
                             current_json = ""
+                        elif block_type == "thinking":
+                            current_block = {
+                                "type": "thinking",
+                                "thinking": chunk_json["content_block"]["thinking"],
+                            }
+                        elif block_type == "redacted_thinking":
+                            current_block = chunk_json["content_block"]
                     elif chunk_type == "content_block_delta":
                         if chunk_json["delta"]["type"] == "text_delta":
                             current_block["text"] += chunk_json["delta"]["text"]
@@ -808,8 +836,15 @@ class AnthropicInferenceClient(InferenceClient):
                                     await middleware(current_block)
                             except ValueError:
                                 pass
+                        elif chunk_json["delta"]["type"] == "thinking_delta":
+                            current_block["thinking"] += chunk_json["delta"]["thinking"]
+                        elif chunk_json["delta"]["type"] == "signature_delta":
+                            current_block["signature"] = chunk_json["delta"][
+                                "signature"
+                            ]
                     elif chunk_type == "content_block_stop":
-                        current_content.append(current_block)
+                        if current_block["type"]:
+                            current_content.append(current_block)
 
                         current_block = {
                             "type": None,
@@ -1202,6 +1237,10 @@ class OAIInferenceClient(InferenceClient):
                 raise InferenceException(await response.aread())
 
             body: dict = response.json()
+            if body.get("error"):
+                raise InferenceException(
+                    body["error"]["message"] + f" ({body['error']})"
+                )
 
             try:
                 self._cost.input_tokens += body["usage"]["prompt_tokens"]
@@ -1607,6 +1646,9 @@ class OpenRouterInferenceClient(OAIInferenceClient):
 
         if self.model in ["openai/o3-mini"]:
             request["reasoning_effort"] = "high"
+
+        if self.model in ["anthropic/claude-3.7-sonnet"]:
+            request["include_reasoning"] = True
 
         async with httpx.AsyncClient() as client:
             async with client.stream(
