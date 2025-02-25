@@ -596,7 +596,7 @@ class AnthropicInferenceClient(InferenceClient):
                 headers={
                     "x-api-key": self.api_key,
                     "anthropic-version": "2023-06-01",
-                    "anthropic-beta": "prompt-caching-2024-07-31",
+                    "anthropic-beta": "prompt-caching-2024-07-31,output-128k-2025-02-19",
                 },
             )
 
@@ -680,7 +680,7 @@ class AnthropicInferenceClient(InferenceClient):
                 headers={
                     "x-api-key": self.api_key,
                     "anthropic-version": "2023-06-01",
-                    "anthropic-beta": "prompt-caching-2024-07-31",
+                    "anthropic-beta": "prompt-caching-2024-07-31,output-128k-2025-02-19",
                 },
             ) as response:
                 if response.status_code == 400:
@@ -774,7 +774,7 @@ class AnthropicInferenceClient(InferenceClient):
                 headers={
                     "x-api-key": self.api_key,
                     "anthropic-version": "2023-06-01",
-                    "anthropic-beta": "prompt-caching-2024-07-31",
+                    "anthropic-beta": "prompt-caching-2024-07-31,output-128k-2025-02-19",
                 },
             ) as response:
                 if response.status_code == 400:
