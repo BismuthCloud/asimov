@@ -165,11 +165,15 @@ class InferenceClient(ABC):
                 Awaitable[tuple[str, List[Tuple[Callable, Dict[str, Any]]], Hashable]],
             ]
         ] = None,
-        tool_parser = None
+        tool_parser = None,
+        tool_result_reducer: Callable[list[dict[str, Any]], str] = None
     ):
         mode = None
         if mode_swap_callback:
             _, _, mode = await mode_swap_callback()
+
+        if tool_parser and not tool_result_reducer:
+            raise ValueError("If tool_parser is set then tool_result_reducer must be set.")
 
         last_mode_cached_message: dict[Hashable, int] = {}
 
@@ -249,7 +253,7 @@ class InferenceClient(ABC):
                         if not resp:
                             raise InferenceException("no response blocks returned")
                         
-                        calls = tool_parser(resp[-1]["text"])
+                        calls = await tool_parser(resp[-1]["text"])
 
                         if type(calls) is not list:
                             calls = [calls]
@@ -310,17 +314,13 @@ class InferenceClient(ABC):
                 try:
                     func = tool_funcs.get(call["name"])
 
-                    print(call["name"])
-
-                    print(func)
-
                     if not func:
                         result = "This tool is not available please select and use an available tool."
                     else:
                         result = await func(call["input"])
                 except StopAsyncIteration:
                     return serialized_messages
-                
+                 
                 if tool_parser:
                     content_blocks.append(
                         {
@@ -336,6 +336,11 @@ class InferenceClient(ABC):
                             "content": str(result),
                         }
                     )
+
+            if tool_parser:
+                content_blocks = [
+                    {"type": "text", "content": await tool_result_reducer(content_blocks)}
+                ]
 
             serialized_messages.append(
                 {
@@ -877,7 +882,6 @@ class AnthropicInferenceClient(InferenceClient):
                         pass
                     else:
                         print("Unknown message type from Anthropic stream.")
-                        print(chunk_json)
 
                 return current_content
 
@@ -1432,8 +1436,6 @@ class OAIInferenceClient(InferenceClient):
 
         request = request.__dict__
 
-        print(request)
-
         async with httpx.AsyncClient() as client:
             async with client.stream(
                 "POST",
@@ -1529,7 +1531,6 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                     continue
 
                 if response.status_code != 200:
-                    print(response.status_code, await response.aread())
                     await asyncio.sleep(0.5)
                     continue
 
@@ -1574,8 +1575,6 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                 ),
                 None,
             )
-            if not text.get("text"):
-                print(text)
             message = {
                 "role": message["role"],
                 "content": text.get("content") or text.get("text"),
