@@ -1422,8 +1422,6 @@ class OAIInferenceClient(InferenceClient):
 
         request = request.__dict__
 
-        print(request)
-
         async with httpx.AsyncClient() as client:
             async with client.stream(
                 "POST",
@@ -1679,6 +1677,8 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                         if "id" in data:
                             id = data["id"]
                         if data.get("error"):
+                            if "invalid_request_error" in str(data['error']):
+                                raise NonRetryableException(str(data['error']))
                             raise InferenceException(
                                 data["error"]["message"] + f" ({data['error']})"
                             )
