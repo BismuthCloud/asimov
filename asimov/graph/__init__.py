@@ -921,3 +921,6 @@ class Agent(AsimovBase):
         with open(snapshot_dir / "task.pkl", "rb") as f:
             task = pickle.load(f)
         await self._run_task(task)
+
+# Need to build after CompositeModule is defined
+AgentModule.model_rebuild()
