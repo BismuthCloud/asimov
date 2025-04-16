@@ -1327,6 +1327,10 @@ class OAIInferenceClient(InferenceClient):
                     request["messages"],
                     [{"text": out}],
                 )
+    
+    @property
+    def include_cache_control(self):
+        return "anthropic" in self.model
 
     @tracer.start_as_current_span(name="OAIInferenceClient._tool_chain_stream")
     async def _tool_chain_stream(
@@ -1365,6 +1369,10 @@ class OAIInferenceClient(InferenceClient):
         processed_messages = []
 
         for message in serialized_messages:
+            if (not self.include_cache_control) and isinstance(message['content'], list):
+                for blk in message['content']:
+                    blk.pop("cache_control", None)
+
             if (
                 message["role"] == "user"
                 and isinstance(message["content"], list)
@@ -1549,13 +1557,17 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                             "type": "text",
                             "text": system,
                             "cache_control": {"type": "ephemeral"},
-                        }
+                        },
                     ],
                 }
             ] + serialized_messages
 
         openrouter_messages = []
         for message in serialized_messages:
+            if (not self.include_cache_control) and isinstance(message['content'], list):
+                for blk in message['content']:
+                    blk.pop("cache_control", None)
+
             if (
                 message["role"] == "user"
                 and isinstance(message["content"], list)
