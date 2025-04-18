@@ -22,9 +22,9 @@ from google.genai import types
 from asimov.asimov_base import AsimovBase
 from asimov.graph import NonRetryableException
 
+logger = logging.getLogger(__name__)
 tracer = opentelemetry.trace.get_tracer(__name__)
 opentelemetry.instrumentation.httpx.HTTPXClientInstrumentor().instrument()
-
 
 class InferenceException(Exception):
     """
@@ -106,6 +106,7 @@ class InferenceClient(ABC):
         )
 
         if self.trace_cb:
+            logger.debug(f"Request {self._trace_id} cost {self._cost}")
             await self.trace_cb(self._trace_id, request, response, self._cost)
             self._cost = InferenceCost()
             self._trace_id += 1
@@ -221,13 +222,13 @@ class InferenceClient(ABC):
                     await self._trace(serialized_messages, resp)
                     break
                 except ValueError as e:
-                    print(f"ValueError hit ({e}), bailing")
+                    logger.info(f"ValueError hit ({e}), bailing")
                     return serialized_messages
                 except NonRetryableException:
-                    print("Non-retryable exception hit, bailing")
+                    logger.info("Non-retryable exception hit, bailing")
                     raise
                 except InferenceException as e:
-                    print("inference exception", e)
+                    logger.info("inference exception %s", e)
                     await asyncio.sleep(3**retry)
                     if retry > 3:
                         # Modify messages to try and cache bust in case we have a poison message or similar
@@ -235,16 +236,12 @@ class InferenceClient(ABC):
                             "text"
                         ] += "\n\nTFJeD9K6smAnr6sUcllj"
                     continue
-                except Exception as e:
-                    print("generic inference exception", e)
-                    import traceback
-
-                    traceback.print_exc()
-
+                except Exception:
+                    logger.warning("generic inference exception", exc_info=True)
                     await asyncio.sleep(3**retry)
                     continue
             else:
-                print("Retries exceeded, bailing!")
+                logger.info("Retries exceeded, bailing!")
                 raise RetriesExceeded()
 
             serialized_messages.append(
@@ -459,7 +456,13 @@ class BedrockInferenceClient(InferenceClient):
                 "tool_choice": {"type": tool_choice},
             }
             if system:
-                request["system"] = system
+                request["system"] = [
+                    {
+                        "type": "text",
+                        "text": system,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
 
             try:
                 response = await client.invoke_model_with_response_stream(
@@ -487,6 +490,12 @@ class BedrockInferenceClient(InferenceClient):
                     self._cost.input_tokens += chunk_json["message"]["usage"][
                         "input_tokens"
                     ]
+                    self._cost.cache_read_input_tokens += chunk_json["message"][
+                        "usage"
+                    ].get("cache_read_input_tokens", 0)
+                    self._cost.cache_write_input_tokens += chunk_json["message"][
+                        "usage"
+                    ].get("cache_creation_input_tokens", 0)
                 elif chunk_type == "content_block_start":
                     block_type = chunk_json["content_block"]["type"]
                     if block_type == "text":
@@ -495,13 +504,20 @@ class BedrockInferenceClient(InferenceClient):
                             "text": "",
                         }
                     elif block_type == "tool_use":
-                        current_block["tool_use"] = {
+                        current_block = {
                             "type": "tool_use",
                             "id": chunk_json["content_block"]["id"],
                             "name": chunk_json["content_block"]["name"],
                             "input": {},
                         }
                         current_json = ""
+                    elif block_type == "thinking":
+                        current_block = {
+                            "type": "thinking",
+                            "thinking": chunk_json["content_block"]["thinking"],
+                        }
+                    elif block_type == "redacted_thinking":
+                        current_block = chunk_json["content_block"]
                 elif chunk_type == "content_block_delta":
                     if chunk_json["delta"]["type"] == "text_delta":
                         current_block["text"] += chunk_json["delta"]["text"]
@@ -517,6 +533,12 @@ class BedrockInferenceClient(InferenceClient):
                                 await middleware(current_block)
                         except ValueError:
                             pass
+                    elif chunk_json["delta"]["type"] == "thinking_delta":
+                        current_block["thinking"] += chunk_json["delta"]["thinking"]
+                    elif chunk_json["delta"]["type"] == "signature_delta":
+                        current_block["signature"] = chunk_json["delta"][
+                            "signature"
+                        ]
                 elif chunk_type == "content_block_stop":
                     current_content.append(current_block)
 
@@ -527,6 +549,12 @@ class BedrockInferenceClient(InferenceClient):
                     if chunk_json["delta"].get("stop_reason") == "tool_use":
                         self._cost.output_tokens += chunk_json["usage"]["output_tokens"]
                         break
+                elif chunk_type == "error":
+                    if chunk_json["error"]["type"] == "invalid_request_error":
+                        raise ValueError(chunk_json["error"]["type"])
+                    raise InferenceException(chunk_json["error"]["type"])
+                elif chunk_type == "ping":
+                    pass
 
             return current_content
 
@@ -862,8 +890,7 @@ class AnthropicInferenceClient(InferenceClient):
                     elif chunk_type == "ping":
                         pass
                     else:
-                        print("Unknown message type from Anthropic stream.")
-                        print(chunk_json)
+                        logger.warning("Unknown message type from Anthropic stream.")
 
                 return current_content
 
@@ -1251,7 +1278,7 @@ class OAIInferenceClient(InferenceClient):
                 )
                 self._cost.output_tokens += body["usage"]["completion_tokens"]
             except KeyError:
-                logging.warning(f"Malformed usage? {repr(body)}")
+                logger.warning(f"Malformed usage? {repr(body)}")
 
             await self._trace(
                 request["messages"],
@@ -1525,7 +1552,6 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                     continue
 
                 if response.status_code != 200:
-                    print(response.status_code, await response.aread())
                     await asyncio.sleep(0.5)
                     continue
 
