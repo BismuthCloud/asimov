@@ -31,9 +31,13 @@ class InferenceException(Exception):
     """
     A generic exception for inference errors.
     Should be safe to retry.
-    ValueError is raised if the request is un-retryable (e.g. parameters are malformed, or the request is too large).
+    ValueError is raised if the request is un-retryable (e.g. parameters are malformed).
     """
 
+    pass
+
+
+class ContextLengthExceeded(InferenceException, ValueError):
     pass
 
 
@@ -155,6 +159,7 @@ class InferenceClient(ABC):
                 Awaitable[tuple[str, List[Tuple[Callable, Dict[str, Any]]], Hashable]],
             ]
         ] = None,
+        fifo_context: bool = False,
     ):
         mode = None
         if mode_swap_callback:
@@ -222,12 +227,43 @@ class InferenceClient(ABC):
 
                     await self._trace(serialized_messages, resp)
                     break
+                except ContextLengthExceeded as e:
+                    if fifo_context:
+                        logger.info(f"ContextLengthExceeded ({e}), tossing early messages and retrying")
+                        # If we hit context length, remove a handful of assistant,user message pairs from the middle
+                        # A handful so that we can hopefully get at least a couple cache hits with this
+                        # truncated history before having to drop messages again.
+
+                        # We want the earliest thing we remove to be an assistant message (requesting the next tool call), which have odd indices
+                        start_remove = int(len(serialized_messages) / 3)
+                        if start_remove % 2 != 1:
+                            start_remove += 1
+                        # And the last thing we remove should be a user message (with tool response), which have even indices
+                        end_remove = int(len(serialized_messages) * 2 / 3)
+                        if end_remove - start_remove % 2 != 0:
+                            end_remove -= 1
+                        logger.debug(
+                            f"Removing messages {start_remove} to {end_remove} from serialized messages"
+                        )
+                        end_remove += 1  # inclusive
+                        serialized_messages = serialized_messages[:start_remove] + serialized_messages[end_remove:]
+                        for mode in last_mode_cached_message.keys():
+                            # Delete markers if they are in the removed range
+                            if start_remove <= last_mode_cached_message[mode] < end_remove:
+                                del last_mode_cached_message[mode]
+                            # And adjust indices of anything that got "slid" back
+                            elif last_mode_cached_message[mode] >= end_remove:
+                                last_mode_cached_message[mode] -= end_remove - start_remove
+                        continue
+                    else:
+                        logger.info("Non-retryable exception hit (context length), bailing")
+                        return serialized_messages
+                except NonRetryableException as e:
+                    logger.info(f"Non-retryable exception hit ({e}), bailing")
+                    raise
                 except ValueError as e:
                     logger.info(f"ValueError hit ({e}), bailing")
                     return serialized_messages
-                except NonRetryableException:
-                    logger.info("Non-retryable exception hit, bailing")
-                    raise
                 except InferenceException as e:
                     logger.info("inference exception %s", e)
                     await asyncio.sleep(3**retry)
@@ -1772,7 +1808,9 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                         if "id" in data:
                             id = data["id"]
                         if data.get("error"):
-                            if "invalid_request_error" in str(data['error']):
+                            if "context" in str(data['error']):
+                                raise ContextLengthExceeded(str(data['error']))
+                            elif "invalid_request_error" in str(data['error']):
                                 raise NonRetryableException(str(data['error']))
                             raise InferenceException(
                                 data["error"]["message"] + f" ({data['error']})"
