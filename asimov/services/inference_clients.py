@@ -240,10 +240,10 @@ class InferenceClient(ABC):
                             start_remove += 1
                         # And the last thing we remove should be a user message (with tool response), which have even indices
                         end_remove = int(len(serialized_messages) * 2 / 3)
-                        if end_remove - start_remove % 2 != 0:
+                        if end_remove % 2 != 0:
                             end_remove -= 1
                         logger.debug(
-                            f"Removing messages {start_remove} to {end_remove} from serialized messages"
+                            f"Removing messages {start_remove} through {end_remove} from serialized messages"
                         )
                         end_remove += 1  # inclusive
                         serialized_messages = serialized_messages[:start_remove] + serialized_messages[end_remove:]
