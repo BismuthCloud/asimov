@@ -18,6 +18,7 @@ import vertexai.generative_models
 import google.api_core.exceptions
 from google import genai
 from google.genai import types
+import google.auth
 
 from asimov.asimov_base import AsimovBase
 from asimov.graph import NonRetryableException
@@ -575,6 +576,32 @@ class AnthropicInferenceClient(InferenceClient):
         self.api_key = api_key
         self.thinking = thinking
 
+    async def _post(self, request: dict):
+        async with httpx.AsyncClient() as client:
+            return await client.post(
+                self.api_url,
+                timeout=300000,
+                json=request,
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "anthropic-beta": "prompt-caching-2024-07-31,output-128k-2025-02-19",
+                },
+            )
+
+    def _stream(self, client, request: dict):
+        return client.stream(
+            "POST",
+            self.api_url,
+            timeout=300000,
+            json=request,
+            headers={
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
+                "anthropic-beta": "prompt-caching-2024-07-31,output-128k-2025-02-19",
+            },
+        )
+
     @tracer.start_as_current_span(name="AnthropicInferenceClient.get_generation")
     @backoff.on_exception(backoff.expo, InferenceException, max_time=60)
     async def get_generation(
@@ -616,38 +643,31 @@ class AnthropicInferenceClient(InferenceClient):
             request["temperature"] = 1
             del request["top_p"]
 
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self.api_url,
-                timeout=300000,
-                json=request,
-                headers={
-                    "x-api-key": self.api_key,
-                    "anthropic-version": "2023-06-01",
-                    "anthropic-beta": "prompt-caching-2024-07-31,output-128k-2025-02-19",
-                },
-            )
+        response = await self._post(
+            request,
+        )
 
-            if response.status_code == 400:
-                raise ValueError(await response.aread())
-            elif response.status_code != 200:
-                raise InferenceException(await response.aread())
+        if response.status_code == 400:
+            # TODO: ContextLengthExceeded
+            raise ValueError(await response.aread())
+        elif response.status_code != 200:
+            raise InferenceException(await response.aread())
 
-            body: dict = response.json()
+        body: dict = response.json()
 
-            # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#tracking-cache-performance
-            self._cost.input_tokens += body["usage"]["input_tokens"]
-            self._cost.cache_read_input_tokens += body["usage"].get(
-                "cache_read_input_tokens", 0
-            )
-            self._cost.cache_write_input_tokens += body["usage"].get(
-                "cache_creation_input_tokens", 0
-            )
-            self._cost.output_tokens += body["usage"]["output_tokens"]
+        # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#tracking-cache-performance
+        self._cost.input_tokens += body["usage"]["input_tokens"]
+        self._cost.cache_read_input_tokens += body["usage"].get(
+            "cache_read_input_tokens", 0
+        )
+        self._cost.cache_write_input_tokens += body["usage"].get(
+            "cache_creation_input_tokens", 0
+        )
+        self._cost.output_tokens += body["usage"]["output_tokens"]
 
-            await self._trace(request["messages"], body["content"])
+        await self._trace(request["messages"], body["content"])
 
-            return next(block["text"] for block in body["content"] if "text" in block)
+        return next(block["text"] for block in body["content"] if "text" in block)
 
     @tracer.start_as_current_span(name="AnthropicInferenceClient.connect_and_listen")
     async def connect_and_listen(
@@ -700,16 +720,8 @@ class AnthropicInferenceClient(InferenceClient):
             del request["top_p"]
 
         async with httpx.AsyncClient() as client:
-            async with client.stream(
-                "POST",
-                self.api_url,
-                timeout=300000,
-                json=request,
-                headers={
-                    "x-api-key": self.api_key,
-                    "anthropic-version": "2023-06-01",
-                    "anthropic-beta": "prompt-caching-2024-07-31,output-128k-2025-02-19",
-                },
+            async with self._stream(
+                client, request,
             ) as response:
                 if response.status_code == 400:
                     raise ValueError(await response.aread())
@@ -794,16 +806,8 @@ class AnthropicInferenceClient(InferenceClient):
         current_json = ""
 
         async with httpx.AsyncClient() as client:
-            async with client.stream(
-                "POST",
-                self.api_url,
-                timeout=300000,
-                json=request,
-                headers={
-                    "x-api-key": self.api_key,
-                    "anthropic-version": "2023-06-01",
-                    "anthropic-beta": "prompt-caching-2024-07-31,output-128k-2025-02-19",
-                },
+            async with self._stream(
+                client, request,
             ) as response:
                 if response.status_code == 400:
                     raise ValueError(await response.aread())
@@ -925,6 +929,59 @@ def smart_unescape_code(s: str) -> str:
 
     return result
 
+class GoogleAnthropicInferenceClient(AnthropicInferenceClient):
+    def __init__(
+        self,
+        model: str,
+        region: str = "us-east5",
+        thinking: Optional[int] = None,
+    ):
+        InferenceClient.__init__(self)
+        self.model = model
+        self.region = region
+        self.thinking = thinking
+        self._get_token()
+
+    def _get_token(self):
+        if not hasattr(self, "creds"):
+            import google.oauth2.id_token
+            import google.auth.transport.requests
+
+            self.creds, self.project_id = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+
+        if not self.creds.token or self.creds.expired:
+            request = google.auth.transport.requests.Request()
+            self.creds.refresh(request)
+
+        return self.creds.token
+
+    async def _post(self, request: dict):
+        request.pop("model", None)
+        request["anthropic_version"] = "vertex-2023-10-16"
+
+        async with httpx.AsyncClient() as client:
+            return await client.post(
+                f"https://{self.region}-aiplatform.googleapis.com/v1/projects/{self.project_id}/locations/{self.region}/publishers/anthropic/models/{self.model}:streamRawPredict",
+                timeout=180,
+                json=request,
+                headers={
+                    "Authorization": f"Bearer {self._get_token()}",
+                },
+            )
+
+    def _stream(self, client, request: dict):
+        request.pop("model", None)
+        request["anthropic_version"] = "vertex-2023-10-16"
+
+        return client.stream(
+            "POST",
+            f"https://{self.region}-aiplatform.googleapis.com/v1/projects/{self.project_id}/locations/{self.region}/publishers/anthropic/models/{self.model}:streamRawPredict",
+            timeout=180,
+            json=request,
+            headers={
+                "Authorization": f"Bearer {self._get_token()}",
+            },
+        )
 
 class GoogleGenAIInferenceClient(InferenceClient):
     def __init__(
@@ -1354,7 +1411,7 @@ class OAIInferenceClient(InferenceClient):
                     request["messages"],
                     [{"text": out}],
                 )
-    
+
     @property
     def include_cache_control(self):
         return "anthropic" in self.model
