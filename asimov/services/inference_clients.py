@@ -1224,7 +1224,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
             for msg in messages
         ]
 
-        response = self.client.aio.models.generate_content_stream(
+        response = await self.client.aio.models.generate_content_stream(
             model=self.model,
             contents=processed_messages,
             config=types.GenerateContentConfig(
