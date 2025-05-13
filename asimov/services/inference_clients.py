@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 tracer = opentelemetry.trace.get_tracer(__name__)
 opentelemetry.instrumentation.httpx.HTTPXClientInstrumentor().instrument()
 
+
 class InferenceException(Exception):
     """
     A generic exception for inference errors.
@@ -229,7 +230,9 @@ class InferenceClient(ABC):
                     break
                 except ContextLengthExceeded as e:
                     if fifo_context:
-                        logger.info(f"ContextLengthExceeded ({e}), tossing early messages and retrying")
+                        logger.info(
+                            f"ContextLengthExceeded ({e}), tossing early messages and retrying"
+                        )
                         # If we hit context length, remove a handful of assistant,user message pairs from the middle
                         # A handful so that we can hopefully get at least a couple cache hits with this
                         # truncated history before having to drop messages again.
@@ -246,17 +249,28 @@ class InferenceClient(ABC):
                             f"Removing messages {start_remove} through {end_remove} from serialized messages"
                         )
                         end_remove += 1  # inclusive
-                        serialized_messages = serialized_messages[:start_remove] + serialized_messages[end_remove:]
+                        serialized_messages = (
+                            serialized_messages[:start_remove]
+                            + serialized_messages[end_remove:]
+                        )
                         for mode in last_mode_cached_message.keys():
                             # Delete markers if they are in the removed range
-                            if start_remove <= last_mode_cached_message[mode] < end_remove:
+                            if (
+                                start_remove
+                                <= last_mode_cached_message[mode]
+                                < end_remove
+                            ):
                                 del last_mode_cached_message[mode]
                             # And adjust indices of anything that got "slid" back
                             elif last_mode_cached_message[mode] >= end_remove:
-                                last_mode_cached_message[mode] -= end_remove - start_remove
+                                last_mode_cached_message[mode] -= (
+                                    end_remove - start_remove
+                                )
                         continue
                     else:
-                        logger.info("Non-retryable exception hit (context length), bailing")
+                        logger.info(
+                            "Non-retryable exception hit (context length), bailing"
+                        )
                         return serialized_messages
                 except NonRetryableException as e:
                     logger.info(f"Non-retryable exception hit ({e}), bailing")
@@ -573,9 +587,7 @@ class BedrockInferenceClient(InferenceClient):
                     elif chunk_json["delta"]["type"] == "thinking_delta":
                         current_block["thinking"] += chunk_json["delta"]["thinking"]
                     elif chunk_json["delta"]["type"] == "signature_delta":
-                        current_block["signature"] = chunk_json["delta"][
-                            "signature"
-                        ]
+                        current_block["signature"] = chunk_json["delta"]["signature"]
                 elif chunk_type == "content_block_stop":
                     current_content.append(current_block)
 
@@ -1489,8 +1501,10 @@ class OAIInferenceClient(InferenceClient):
         processed_messages = []
 
         for message in serialized_messages:
-            if (not self.include_cache_control) and isinstance(message['content'], list):
-                for blk in message['content']:
+            if (not self.include_cache_control) and isinstance(
+                message["content"], list
+            ):
+                for blk in message["content"]:
                     blk.pop("cache_control", None)
 
             if (
@@ -1683,8 +1697,10 @@ class OpenRouterInferenceClient(OAIInferenceClient):
 
         openrouter_messages = []
         for message in serialized_messages:
-            if (not self.include_cache_control) and isinstance(message['content'], list):
-                for blk in message['content']:
+            if (not self.include_cache_control) and isinstance(
+                message["content"], list
+            ):
+                for blk in message["content"]:
                     blk.pop("cache_control", None)
 
             if (
@@ -1808,10 +1824,10 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                         if "id" in data:
                             id = data["id"]
                         if data.get("error"):
-                            if "context" in str(data['error']):
-                                raise ContextLengthExceeded(str(data['error']))
-                            elif "invalid_request_error" in str(data['error']):
-                                raise NonRetryableException(str(data['error']))
+                            if "context" in str(data["error"]):
+                                raise ContextLengthExceeded(str(data["error"]))
+                            elif "invalid_request_error" in str(data["error"]):
+                                raise NonRetryableException(str(data["error"]))
                             raise InferenceException(
                                 data["error"]["message"] + f" ({data['error']})"
                             )
