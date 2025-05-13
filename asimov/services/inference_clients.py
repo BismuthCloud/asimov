@@ -488,11 +488,6 @@ class BedrockInferenceClient(InferenceClient):
         tool_choice="any",
         middlewares: List[Callable[[dict[str, Any]], Awaitable[None]]] = [],
     ):
-        for msg in serialized_messages:
-            msg["content"][-1].pop("cache_control", None)
-        for _, tool in tools:
-            tool.pop("cache_control", None)
-
         async with self.session.client(
             service_name="bedrock-runtime",
             region_name=self.region_name,
@@ -769,7 +764,8 @@ class AnthropicInferenceClient(InferenceClient):
 
         async with httpx.AsyncClient() as client:
             async with self._stream(
-                client, request,
+                client,
+                request,
             ) as response:
                 if response.status_code == 400:
                     raise ValueError(await response.aread())
@@ -855,7 +851,8 @@ class AnthropicInferenceClient(InferenceClient):
 
         async with httpx.AsyncClient() as client:
             async with self._stream(
-                client, request,
+                client,
+                request,
             ) as response:
                 if response.status_code == 400:
                     raise ValueError(await response.aread())
@@ -977,6 +974,7 @@ def smart_unescape_code(s: str) -> str:
 
     return result
 
+
 class GoogleAnthropicInferenceClient(AnthropicInferenceClient):
     def __init__(
         self,
@@ -995,7 +993,9 @@ class GoogleAnthropicInferenceClient(AnthropicInferenceClient):
             import google.oauth2.id_token
             import google.auth.transport.requests
 
-            self.creds, self.project_id = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+            self.creds, self.project_id = google.auth.default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
 
         if not self.creds.token or self.creds.expired:
             request = google.auth.transport.requests.Request()
@@ -1030,6 +1030,7 @@ class GoogleAnthropicInferenceClient(AnthropicInferenceClient):
                 "Authorization": f"Bearer {self._get_token()}",
             },
         )
+
 
 class GoogleGenAIInferenceClient(InferenceClient):
     def __init__(
