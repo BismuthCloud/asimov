@@ -64,6 +64,15 @@ class ChatMessage(AsimovBase):
     model_families: List[str] = Field(default_factory=list)
 
 
+class MultiTurnResponse:
+    def __init__(self, first_response: str, others: list[ChatMessage]):
+        self.first_response = first_response
+        self.others = others
+
+    def __str__(self):
+        return self.first_response
+
+
 class AnthropicRequest(AsimovBase):
     anthropic_version: str
     system: str
@@ -342,6 +351,20 @@ class InferenceClient(ABC):
                     "content": content_blocks,
                 }
             )
+            if isinstance(result, MultiTurnResponse):
+                for other in result.others:
+                    serialized_messages.append(
+                        {
+                            "role": other.role.value,
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": other.content,
+                                }
+                            ],
+                        }
+                    )
+
         return serialized_messages
 
 
