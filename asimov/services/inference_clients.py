@@ -21,6 +21,7 @@ from google.genai import types
 import google.auth
 
 from asimov.asimov_base import AsimovBase
+from asimov.utils.token_counter import approx_tokens_from_serialized_messages
 from asimov.graph import NonRetryableException
 
 logger = logging.getLogger(__name__)
@@ -160,7 +161,7 @@ class InferenceClient(ABC):
                 Awaitable[tuple[str, List[Tuple[Callable, Dict[str, Any]]], Hashable]],
             ]
         ] = None,
-        fifo_context: bool = False,
+        fifo_ratio: Optional[float] = None,
     ):
         mode = None
         if mode_swap_callback:
@@ -208,6 +209,46 @@ class InferenceClient(ABC):
 
             last_mode_cached_message[mode] = len(serialized_messages) - 1
 
+            tokens = approx_tokens_from_serialized_messages(serialized_messages)
+
+            if fifo_ratio and (tokens / 200000) > fifo_ratio:
+                logger.info(
+                    f"ContextLengthExceeded ({e}), tossing early messages and retrying"
+                )
+                # If we hit context length, remove a handful of assistant,user message pairs from the middle
+                # A handful so that we can hopefully get at least a couple cache hits with this
+                # truncated history before having to drop messages again.
+
+                # We want the earliest thing we remove to be an assistant message (requesting the next tool call), which have odd indices
+                start_remove = int(len(serialized_messages) / 3)
+                if start_remove % 2 != 1:
+                    start_remove += 1
+                # And the last thing we remove should be a user message (with tool response), which have even indices
+                end_remove = int(len(serialized_messages) * 2 / 3)
+                if end_remove % 2 != 0:
+                    end_remove -= 1
+                logger.debug(
+                    f"Removing messages {start_remove} through {end_remove} from serialized messages"
+                )
+                end_remove += 1  # inclusive
+                serialized_messages = (
+                    serialized_messages[:start_remove]
+                    + serialized_messages[end_remove:]
+                )
+                for mode in last_mode_cached_message.keys():
+                    # Delete markers if they are in the removed range
+                    if (
+                        start_remove
+                        <= last_mode_cached_message[mode]
+                        < end_remove
+                    ):
+                        del last_mode_cached_message[mode]
+                    # And adjust indices of anything that got "slid" back
+                    elif last_mode_cached_message[mode] >= end_remove:
+                        last_mode_cached_message[mode] -= (
+                            end_remove - start_remove
+                        )
+
             for retry in range(1, 5):
                 try:
                     resp = await self._tool_chain_stream(
@@ -229,49 +270,10 @@ class InferenceClient(ABC):
                     await self._trace(serialized_messages, resp)
                     break
                 except ContextLengthExceeded as e:
-                    if fifo_context:
-                        logger.info(
-                            f"ContextLengthExceeded ({e}), tossing early messages and retrying"
-                        )
-                        # If we hit context length, remove a handful of assistant,user message pairs from the middle
-                        # A handful so that we can hopefully get at least a couple cache hits with this
-                        # truncated history before having to drop messages again.
-
-                        # We want the earliest thing we remove to be an assistant message (requesting the next tool call), which have odd indices
-                        start_remove = int(len(serialized_messages) / 3)
-                        if start_remove % 2 != 1:
-                            start_remove += 1
-                        # And the last thing we remove should be a user message (with tool response), which have even indices
-                        end_remove = int(len(serialized_messages) * 2 / 3)
-                        if end_remove % 2 != 0:
-                            end_remove -= 1
-                        logger.debug(
-                            f"Removing messages {start_remove} through {end_remove} from serialized messages"
-                        )
-                        end_remove += 1  # inclusive
-                        serialized_messages = (
-                            serialized_messages[:start_remove]
-                            + serialized_messages[end_remove:]
-                        )
-                        for mode in last_mode_cached_message.keys():
-                            # Delete markers if they are in the removed range
-                            if (
-                                start_remove
-                                <= last_mode_cached_message[mode]
-                                < end_remove
-                            ):
-                                del last_mode_cached_message[mode]
-                            # And adjust indices of anything that got "slid" back
-                            elif last_mode_cached_message[mode] >= end_remove:
-                                last_mode_cached_message[mode] -= (
-                                    end_remove - start_remove
-                                )
-                        continue
-                    else:
-                        logger.info(
-                            "Non-retryable exception hit (context length), bailing"
-                        )
-                        return serialized_messages
+                    logger.info(
+                        "Non-retryable exception hit (context length), bailing"
+                    )
+                    return serialized_messages
                 except NonRetryableException as e:
                     logger.info(f"Non-retryable exception hit ({e}), bailing")
                     raise

@@ -38,21 +38,20 @@ class Cache(AsimovBase, ABC):
 
     @asynccontextmanager
     async def with_prefix(self, prefix: str):
-        old_prefix = await self.get_prefix()
-        self._prefix.set(prefix)
+        token = self._prefix.set(prefix)
         try:
             yield self
         finally:
-            self._prefix.set(old_prefix)
+            self._prefix.reset(token)
 
     @asynccontextmanager
     async def with_suffix(self, suffix: str):
-        old_suffix = await self.get_suffix()
-        self._suffix.set(suffix)
+        token = self._suffix.set(suffix)
         try:
             yield self
         finally:
-            self._suffix.set(old_suffix)
+            self._suffix.reset(token)
+ 
 
     def __getitem__(self, key: str):
         return self.get(key)
