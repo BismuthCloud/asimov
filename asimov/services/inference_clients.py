@@ -96,9 +96,11 @@ class InferenceClient(ABC):
         ]
     ] = None
     _cost: InferenceCost
+    _last_cost: InferenceCost
 
     def __init__(self):
         self._cost = InferenceCost()
+        self._last_cost = InferenceCost()
 
     async def _trace(self, request, response):
         opentelemetry.trace.get_current_span().set_attribute(
@@ -115,6 +117,7 @@ class InferenceClient(ABC):
         if self.trace_cb:
             logger.debug(f"Request {self._trace_id} cost {self._cost}")
             await self.trace_cb(self._trace_id, request, response, self._cost)
+            self._last_cost = self._cost
             self._cost = InferenceCost()
             self._trace_id += 1
 
@@ -209,11 +212,9 @@ class InferenceClient(ABC):
 
             last_mode_cached_message[mode] = len(serialized_messages) - 1
 
-            tokens = approx_tokens_from_serialized_messages(serialized_messages)
-
-            if fifo_ratio and (tokens / 200000) > fifo_ratio:
+            if fifo_ratio and ((self._last_cost.cache_read_input_tokens + self._last_cost.input_tokens)/ 200000) > fifo_ratio:
                 logger.info(
-                    f"ContextLengthExceeded ({e}), tossing early messages and retrying"
+                    f"cache threshold hit, tossing early messages and retrying"
                 )
                 # If we hit context length, remove a handful of assistant,user message pairs from the middle
                 # A handful so that we can hopefully get at least a couple cache hits with this
@@ -1797,7 +1798,7 @@ class OpenRouterInferenceClient(OAIInferenceClient):
 
         if self.model in ["anthropic/claude-3.7-sonnet"]:
             request["include_reasoning"] = True
-
+            
         async with httpx.AsyncClient() as client:
             async with client.stream(
                 "POST",
@@ -1810,7 +1811,7 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                 timeout=60,
             ) as response:
                 if response.status_code == 400:
-                    raise ValueError()
+                    raise ValueError(await response.aread())
                 elif response.status_code != 200:
                     raise InferenceException(await response.aread())
 
