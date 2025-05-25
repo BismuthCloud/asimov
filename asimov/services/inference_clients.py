@@ -134,18 +134,6 @@ class InferenceClient(ABC):
         pass
 
     @abstractmethod
-    async def _unstructured_stream(
-        self,
-        serialized_messages,
-        system=None,
-        max_tokens=1024,
-        top_p=0.9,
-        temperature=0.5,
-        middlewares=[],
-    ):
-        pass
-
-    @abstractmethod
     async def _tool_chain_stream(
         self,
         serialized_messages: List[Dict[str, Any]],
@@ -177,8 +165,8 @@ class InferenceClient(ABC):
             ]
         ] = None,
         fifo_ratio: Optional[float] = None,
-        tool_parser = None,
-        tool_result_reducer: Callable[list[dict[str, Any]], str] = None
+        tool_parser: Optional[Callable[[str, ...], list[Callable[[any], str]]]] = None,
+        tool_result_reducer: Optional[Callable[[list[dict[str, Any]]], str]] = None
     ):
         mode = None
         if mode_swap_callback:
@@ -195,7 +183,7 @@ class InferenceClient(ABC):
         tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
         system = None
-        if messages[0].role == ChatRole.SYSTEM:
+        if messages[0].role == ChatRole.SYSTEM and not tool_parser:
             system = messages[0].content
             messages = messages[1:]
 
@@ -290,26 +278,39 @@ class InferenceClient(ABC):
                             raise InferenceException("no response blocks returned")
 
                         calls = [c for c in resp if c["type"] == "tool_use"]
+
+                        await self._trace(serialized_messages, resp)
                     else:
-                        resp = await self._unstructured_stream(
-                            serialized_messages,
-                            system=system,
+                        buf = ""
+                        calls = None
+
+                        # this is a little dumb since we serialize them above, but we do the caching updates so whatever
+                        unserialized_messages = [
+                            ChatMessage(
+                                role=ChatRole(msg["role"]),
+                                content=msg["content"][0]["text"],
+                                cache_marker=msg["content"][0].get("cache_control", {}).get(
+                                    "type", None
+                                ) == "ephemeral",
+                            )
+                            for msg in serialized_messages
+                        ]
+
+                        async for token in self.connect_and_listen(
+                            unserialized_messages,
                             max_tokens=max_tokens,
                             top_p=top_p,
                             temperature=temperature,
-                            middlewares=middlewares,
-                        )
+                        ):
+                            buf += token
 
-                        if not resp:
-                            raise InferenceException("no response blocks returned")
-                        
-                        calls = await tool_parser(resp[-1]["text"])
+                            calls = await tool_parser(token, mode)
 
                         if type(calls) is not list:
                             calls = [calls]
-                        
 
-                    await self._trace(serialized_messages, resp)
+                        resp = [{"type": "text", "text": buf}]
+                        
                     break
                 except ContextLengthExceeded as e:
                     logger.info(
@@ -1504,14 +1505,17 @@ class OAIInferenceClient(InferenceClient):
                         elif data.get("usage"):
                             self._cost.input_tokens += data["usage"]["prompt_tokens"]
                             # No reference to cached tokens in the docs for the streaming API response objects...
-                            self._cost.cache_read_input_tokens += (
-                                data["usage"]
-                                .get("prompt_tokens_details", {})
-                                .get("cached_tokens", 0)
-                            )
-                            self._cost.output_tokens += data["usage"][
-                                "completion_tokens"
-                            ]
+                            try:
+                                self._cost.cache_read_input_tokens += (
+                                    data["usage"]
+                                    .get("prompt_tokens_details", {})
+                                    .get("cached_tokens", 0)
+                                )
+                                self._cost.output_tokens += data["usage"][
+                                    "completion_tokens"
+                                ]
+                            except AttributeError as e:
+                                logger.warning(f"Malformed usage? {repr(data)}")
 
                 await self._trace(
                     request["messages"],
@@ -1726,100 +1730,6 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                 self._cost.output_tokens += body["data"]["native_tokens_completion"]
                 self._cost.dollar_adjust += -(body["data"]["cache_discount"] or 0)
                 return
-            
-    @tracer.start_as_current_span(name="OpenRouterInferenceClient._unstructured_stream")
-    async def _unstructured_stream(
-        self,
-        serialized_messages,
-        system=None,
-        max_tokens=1024,
-        top_p=0.9,
-        temperature=0.5,
-        middlewares=[],
-    ):
-        if system:
-            serialized_messages = [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": system,
-                            "cache_control": {"type": "ephemeral"},
-                        }
-                    ],
-                }
-            ] + serialized_messages
-
-        openrouter_messages = []
-        for message in serialized_messages:
-            text = next(
-                (
-                    content
-                    for content in message["content"]
-                    if content["type"] == "text"
-                ),
-                None,
-            )
-            message = {
-                "role": message["role"],
-                "content": text.get("content") or text.get("text"),
-            }
-            openrouter_messages.append(message.copy())
-
-        request = {
-            "model": self.model,
-            "messages": openrouter_messages,
-            "max_tokens": max_tokens,
-            "top_p": top_p,
-            "temperature": temperature,
-            "stream": True,
-        }
-
-        if self.model in ["openai/o3-mini"]:
-            request["reasoning_effort"] = "high"
-
-        async with httpx.AsyncClient() as client:
-            async with client.stream(
-                "POST",
-                self.api_url,
-                json=request,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                timeout=60,
-            ) as response:
-                if response.status_code == 400:
-                    raise ValueError()
-                elif response.status_code != 200:
-                    raise InferenceException(await response.aread())
-
-                id = None
-                text_block = None
-
-                async for line in response.aiter_lines():
-                    if line == "data: [DONE]":
-                        await self._populate_cost(id)
-                        return ([text_block] if text_block else [])
-                    if line.startswith("data: "):
-                        data = json.loads(line[6:])
-                        if "id" in data:
-                            id = data["id"]
-                        if data.get("error"):
-                            raise InferenceException(
-                                data["error"]["message"] + f" ({data['error']})"
-                            )
-                        if data["choices"]:
-                            d = data["choices"][0]["delta"]
-                            if d.get("content"):
-                                if not text_block:
-                                    text_block = {
-                                        "type": "text",
-                                        "text": d["content"],
-                                    }
-                                else:
-                                    text_block["text"] += d["content"]
 
     @tracer.start_as_current_span(name="OpenRouterInferenceClient._tool_chain_stream")
     async def _tool_chain_stream(
