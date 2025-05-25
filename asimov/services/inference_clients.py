@@ -304,7 +304,9 @@ class InferenceClient(ABC):
                         ):
                             buf += token
 
-                            calls = await tool_parser(token, mode)
+                            calls = await tool_parser(buf, mode)
+
+                            print(f"Got tool calls: {calls}")
 
                         if type(calls) is not list:
                             calls = [calls]
@@ -389,9 +391,9 @@ class InferenceClient(ABC):
                         }
                     )
 
-            if tool_parser:
+            if tool_parser and tool_result_reducer:
                 content_blocks = [
-                    {"type": "text", "content": await tool_result_reducer(content_blocks)}
+                    {"type": "text", "text": tool_result_reducer(calls, content_blocks)}
                 ]
 
             serialized_messages.append(
