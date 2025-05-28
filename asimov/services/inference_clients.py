@@ -306,8 +306,6 @@ class InferenceClient(ABC):
 
                             calls = await tool_parser(buf, mode)
 
-                            print(f"Got tool calls: {calls}")
-
                         if type(calls) is not list:
                             calls = [calls]
 
@@ -1413,6 +1411,12 @@ class OAIInferenceClient(InferenceClient):
                 stream=False,
             ).model_dump(exclude={"stream_options", "tools", "tool_choice"})
 
+        if "o3" in self.model or "o4" in self.model:
+            del request["temperature"]
+            del request["top_p"]
+            del request["max_tokens"]
+            request["reasoning_effort"] = "high"
+
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 self.api_url,
@@ -1472,6 +1476,12 @@ class OAIInferenceClient(InferenceClient):
             stream=True,
             stream_options={"include_usage": True},
         ).model_dump(exclude={"tools", "tool_choice"})
+
+        if "o3" in self.model or "o4" in self.model:
+            del request["temperature"]
+            del request["top_p"]
+            del request["max_tokens"]
+            request["reasoning_effort"] = "high"
 
         async with httpx.AsyncClient() as client:
             async with client.stream(
@@ -1628,6 +1638,13 @@ class OAIInferenceClient(InferenceClient):
 
         request = request.__dict__
 
+        if "o3" in self.model or "o4" in self.model:
+            del request["temperature"]
+            del request["top_p"]
+            del request["max_tokens"]
+            request["reasoning_effort"] = "high"
+            request["tool_choice"] = "required"
+
         async with httpx.AsyncClient() as client:
             async with client.stream(
                 "POST",
@@ -1640,7 +1657,7 @@ class OAIInferenceClient(InferenceClient):
                 },
             ) as response:
                 if response.status_code == 400:
-                    raise ValueError()
+                    raise ValueError(await response.aread())
                 elif response.status_code != 200:
                     raise InferenceException(await response.aread())
 
@@ -1673,13 +1690,13 @@ class OAIInferenceClient(InferenceClient):
                                             "input": {},
                                         }
                                     )
-                                tool_call_blocks[int(tc["id"])]["raw_input"] += tc[
+                                tool_call_blocks[tc["index"]]["raw_input"] += tc[
                                     "function"
                                 ]["arguments"]
                                 try:
-                                    tool_call_blocks[int(tc["id"])]["input"] = (
+                                    tool_call_blocks[tc["index"]]["input"] = (
                                         pydantic_core.from_json(
-                                            tool_call_blocks[int(tc["id"])][
+                                            tool_call_blocks[tc["index"]][
                                                 "raw_input"
                                             ],
                                             allow_partial=True,
@@ -1687,7 +1704,7 @@ class OAIInferenceClient(InferenceClient):
                                     )
                                     for middleware in middlewares:
                                         await middleware(
-                                            tool_call_blocks[int(tc["id"])]
+                                            tool_call_blocks[tc["index"]]
                                         )
                                 except ValueError:
                                     pass
