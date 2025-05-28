@@ -151,7 +151,7 @@ class InferenceClient(ABC):
     async def tool_chain(
         self,
         messages: List[ChatMessage],
-        tools: List[Tuple[Callable, Dict[str, Any]]]=[],
+        tools: List[Tuple[Callable, Dict[str, Any]]] = [],
         max_tokens=1024,
         top_p=0.9,
         temperature=0.5,
@@ -166,14 +166,16 @@ class InferenceClient(ABC):
         ] = None,
         fifo_ratio: Optional[float] = None,
         tool_parser: Optional[Callable[[str, ...], list[Callable[[any], str]]]] = None,
-        tool_result_reducer: Optional[Callable[[list[dict[str, Any]]], str]] = None
+        tool_result_reducer: Optional[Callable[[list[dict[str, Any]]], str]] = None,
     ):
         mode = None
         if mode_swap_callback:
             _, _, mode = await mode_swap_callback()
 
         if tool_parser and not tool_result_reducer:
-            raise ValueError("If tool_parser is set then tool_result_reducer must be set.")
+            raise ValueError(
+                "If tool_parser is set then tool_result_reducer must be set."
+            )
 
         last_mode_cached_message: dict[Hashable, int] = {}
 
@@ -222,10 +224,18 @@ class InferenceClient(ABC):
 
             last_mode_cached_message[mode] = len(serialized_messages) - 1
 
-            if fifo_ratio and ((self._last_cost.cache_read_input_tokens + self._last_cost.input_tokens)/ 200000) > fifo_ratio:
-                logger.info(
-                    f"cache threshold hit, tossing early messages and retrying"
+            if (
+                fifo_ratio
+                and (
+                    (
+                        self._last_cost.cache_read_input_tokens
+                        + self._last_cost.input_tokens
+                    )
+                    / 200000
                 )
+                > fifo_ratio
+            ):
+                logger.info(f"cache threshold hit, tossing early messages and retrying")
                 # If we hit context length, remove a handful of assistant,user message pairs from the middle
                 # A handful so that we can hopefully get at least a couple cache hits with this
                 # truncated history before having to drop messages again.
@@ -248,17 +258,11 @@ class InferenceClient(ABC):
                 )
                 for mode in last_mode_cached_message.keys():
                     # Delete markers if they are in the removed range
-                    if (
-                        start_remove
-                        <= last_mode_cached_message[mode]
-                        < end_remove
-                    ):
+                    if start_remove <= last_mode_cached_message[mode] < end_remove:
                         del last_mode_cached_message[mode]
                     # And adjust indices of anything that got "slid" back
                     elif last_mode_cached_message[mode] >= end_remove:
-                        last_mode_cached_message[mode] -= (
-                            end_remove - start_remove
-                        )
+                        last_mode_cached_message[mode] -= end_remove - start_remove
 
             for retry in range(1, 5):
                 try:
@@ -289,9 +293,10 @@ class InferenceClient(ABC):
                             ChatMessage(
                                 role=ChatRole(msg["role"]),
                                 content=msg["content"][0]["text"],
-                                cache_marker=msg["content"][0].get("cache_control", {}).get(
-                                    "type", None
-                                ) == "ephemeral",
+                                cache_marker=msg["content"][0]
+                                .get("cache_control", {})
+                                .get("type", None)
+                                == "ephemeral",
                             )
                             for msg in serialized_messages
                         ]
@@ -310,12 +315,10 @@ class InferenceClient(ABC):
                             calls = [calls]
 
                         resp = [{"type": "text", "text": buf}]
-                        
+
                     break
                 except ContextLengthExceeded as e:
-                    logger.info(
-                        "Non-retryable exception hit (context length), bailing"
-                    )
+                    logger.info("Non-retryable exception hit (context length), bailing")
                     return serialized_messages
                 except NonRetryableException as e:
                     logger.info(f"Non-retryable exception hit ({e}), bailing")
@@ -372,7 +375,7 @@ class InferenceClient(ABC):
                         result = await func(call["input"])
                 except StopAsyncIteration:
                     return serialized_messages
-                 
+
                 if tool_parser:
                     content_blocks.append(
                         {
@@ -1696,16 +1699,12 @@ class OAIInferenceClient(InferenceClient):
                                 try:
                                     tool_call_blocks[tc["index"]]["input"] = (
                                         pydantic_core.from_json(
-                                            tool_call_blocks[tc["index"]][
-                                                "raw_input"
-                                            ],
+                                            tool_call_blocks[tc["index"]]["raw_input"],
                                             allow_partial=True,
                                         )
                                     )
                                     for middleware in middlewares:
-                                        await middleware(
-                                            tool_call_blocks[tc["index"]]
-                                        )
+                                        await middleware(tool_call_blocks[tc["index"]])
                                 except ValueError:
                                     pass
                         if data.get("usage"):
@@ -1873,9 +1872,12 @@ class OpenRouterInferenceClient(OAIInferenceClient):
         if self.model in ["openai/o3-mini"]:
             request["reasoning_effort"] = "high"
 
-        if self.model in ["anthropic/claude-3.7-sonnet"]:
-            request["include_reasoning"] = True
-            
+        if self.model in ["anthropic/claude-sonnet-4"]:
+            request["reasoning"] = {
+                "max_tokens": int(max_tokens * 0.8),
+            }
+            del request["tool_choice"]
+
         async with httpx.AsyncClient() as client:
             async with client.stream(
                 "POST",
@@ -1888,6 +1890,7 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                 timeout=60,
             ) as response:
                 if response.status_code == 400:
+                    print(request)
                     raise ValueError(await response.aread())
                 elif response.status_code != 200:
                     raise InferenceException(await response.aread())
@@ -1902,6 +1905,7 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                         return ([text_block] if text_block else []) + tool_call_blocks
                     if line.startswith("data: "):
                         data = json.loads(line[6:])
+                        print(data)
                         if "id" in data:
                             id = data["id"]
                         if data.get("error"):
