@@ -325,6 +325,9 @@ class InferenceClient(ABC):
                     raise
                 except ValueError as e:
                     logger.info(f"ValueError hit ({e}), bailing")
+                    import traceback
+
+                    traceback.print_exc()
                     return serialized_messages
                 except InferenceException as e:
                     logger.info("inference exception %s", e)
@@ -689,7 +692,7 @@ class AnthropicInferenceClient(InferenceClient):
                 headers={
                     "x-api-key": self.api_key,
                     "anthropic-version": "2023-06-01",
-                    "anthropic-beta": "prompt-caching-2024-07-31,output-128k-2025-02-19",
+                    "anthropic-beta": "output-128k-2025-02-19",
                 },
             )
 
@@ -702,7 +705,7 @@ class AnthropicInferenceClient(InferenceClient):
             headers={
                 "x-api-key": self.api_key,
                 "anthropic-version": "2023-06-01",
-                "anthropic-beta": "prompt-caching-2024-07-31,output-128k-2025-02-19",
+                "anthropic-beta": "output-128k-2025-02-19,interleaved-thinking-2025-05-14",
             },
         )
 
@@ -917,6 +920,8 @@ class AnthropicInferenceClient(InferenceClient):
             ) as response:
                 if response.status_code == 400:
                     raise ValueError(await response.aread())
+                elif response.status_code == 413:
+                    raise ContextLengthExceeded(await response.aread())
                 elif response.status_code != 200:
                     raise InferenceException(await response.aread())
 
@@ -1002,6 +1007,7 @@ class AnthropicInferenceClient(InferenceClient):
                     else:
                         logger.warning("Unknown message type from Anthropic stream.")
 
+                print(current_content)
                 return current_content
 
 
