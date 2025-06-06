@@ -212,10 +212,18 @@ class InferenceClient(ABC):
 
             last_mode_cached_message[mode] = len(serialized_messages) - 1
 
-            if fifo_ratio and ((self._last_cost.cache_read_input_tokens + self._last_cost.input_tokens)/ 200000) > fifo_ratio:
-                logger.info(
-                    f"cache threshold hit, tossing early messages and retrying"
+            if (
+                fifo_ratio
+                and (
+                    (
+                        self._last_cost.cache_read_input_tokens
+                        + self._last_cost.input_tokens
+                    )
+                    / 200000
                 )
+                > fifo_ratio
+            ):
+                logger.info(f"cache threshold hit, tossing early messages and retrying")
                 # If we hit context length, remove a handful of assistant,user message pairs from the middle
                 # A handful so that we can hopefully get at least a couple cache hits with this
                 # truncated history before having to drop messages again.
@@ -238,17 +246,11 @@ class InferenceClient(ABC):
                 )
                 for mode in last_mode_cached_message.keys():
                     # Delete markers if they are in the removed range
-                    if (
-                        start_remove
-                        <= last_mode_cached_message[mode]
-                        < end_remove
-                    ):
+                    if start_remove <= last_mode_cached_message[mode] < end_remove:
                         del last_mode_cached_message[mode]
                     # And adjust indices of anything that got "slid" back
                     elif last_mode_cached_message[mode] >= end_remove:
-                        last_mode_cached_message[mode] -= (
-                            end_remove - start_remove
-                        )
+                        last_mode_cached_message[mode] -= end_remove - start_remove
 
             for retry in range(1, 5):
                 try:
@@ -271,9 +273,7 @@ class InferenceClient(ABC):
                     await self._trace(serialized_messages, resp)
                     break
                 except ContextLengthExceeded as e:
-                    logger.info(
-                        "Non-retryable exception hit (context length), bailing"
-                    )
+                    logger.info("Non-retryable exception hit (context length), bailing")
                     return serialized_messages
                 except NonRetryableException as e:
                     logger.info(f"Non-retryable exception hit ({e}), bailing")
@@ -1164,10 +1164,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
 
         tool_config = {"function_calling_config": {"mode": tool_choice.upper()}}
 
-        if self.model == "gemini-2.0-flash-exp":
-            await asyncio.sleep(6.5)
-
-        request = self.client.aio.models.generate_content_stream(
+        request = await self.client.aio.models.generate_content_stream(
             model=self.model,
             contents=processed_messages,
             config=types.GenerateContentConfig(
@@ -1798,7 +1795,7 @@ class OpenRouterInferenceClient(OAIInferenceClient):
 
         if self.model in ["anthropic/claude-3.7-sonnet"]:
             request["include_reasoning"] = True
-            
+
         async with httpx.AsyncClient() as client:
             async with client.stream(
                 "POST",
