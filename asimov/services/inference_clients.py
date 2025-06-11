@@ -179,9 +179,6 @@ class InferenceClient(ABC):
 
         last_mode_cached_message: dict[Hashable, int] = {}
 
-        if not tool_parser:
-            tools[-1][1]["cache_control"] = {"type": "ephemeral"}
-
         tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
         system = None
@@ -197,10 +194,11 @@ class InferenceClient(ABC):
         for _ in range(max_iterations):
             for msg in serialized_messages:
                 msg["content"][-1].pop("cache_control", None)
-            if mode_swap_callback and len(serialized_messages) > 2:
-                if not tool_parser:
-                    tools[-1][1].pop("cache_control", None)
 
+            for _, tool in tools:
+                tool.pop("cache_control", None)
+
+            if mode_swap_callback and len(serialized_messages) > 2:
                 prompt, tools, mode = await mode_swap_callback()
 
                 if not tool_parser:
