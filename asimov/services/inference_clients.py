@@ -1872,12 +1872,6 @@ class OpenRouterInferenceClient(OAIInferenceClient):
         if self.model in ["openai/o3-mini"]:
             request["reasoning_effort"] = "high"
 
-        if self.model in ["anthropic/claude-sonnet-4"]:
-            request["reasoning"] = {
-                "max_tokens": int(max_tokens * 0.8),
-            }
-            del request["tool_choice"]
-
         async with httpx.AsyncClient() as client:
             async with client.stream(
                 "POST",
