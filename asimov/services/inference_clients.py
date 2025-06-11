@@ -1096,63 +1096,6 @@ class GoogleAnthropicInferenceClient(AnthropicInferenceClient):
         )
 
 
-class GoogleAnthropicInferenceClient(AnthropicInferenceClient):
-    def __init__(
-        self,
-        model: str,
-        region: str = "us-east5",
-        thinking: Optional[int] = None,
-    ):
-        InferenceClient.__init__(self)
-        self.model = model
-        self.region = region
-        self.thinking = thinking
-        self._get_token()
-
-    def _get_token(self):
-        if not hasattr(self, "creds"):
-            import google.oauth2.id_token
-            import google.auth.transport.requests
-
-            self.creds, self.project_id = google.auth.default(
-                scopes=["https://www.googleapis.com/auth/cloud-platform"]
-            )
-
-        if not self.creds.token or self.creds.expired:
-            request = google.auth.transport.requests.Request()
-            self.creds.refresh(request)
-
-        return self.creds.token
-
-    async def _post(self, request: dict):
-        request.pop("model", None)
-        request["anthropic_version"] = "vertex-2023-10-16"
-
-        async with httpx.AsyncClient() as client:
-            return await client.post(
-                f"https://{self.region}-aiplatform.googleapis.com/v1/projects/{self.project_id}/locations/{self.region}/publishers/anthropic/models/{self.model}:streamRawPredict",
-                timeout=180,
-                json=request,
-                headers={
-                    "Authorization": f"Bearer {self._get_token()}",
-                },
-            )
-
-    def _stream(self, client, request: dict):
-        request.pop("model", None)
-        request["anthropic_version"] = "vertex-2023-10-16"
-
-        return client.stream(
-            "POST",
-            f"https://{self.region}-aiplatform.googleapis.com/v1/projects/{self.project_id}/locations/{self.region}/publishers/anthropic/models/{self.model}:streamRawPredict",
-            timeout=180,
-            json=request,
-            headers={
-                "Authorization": f"Bearer {self._get_token()}",
-            },
-        )
-
-
 class GoogleGenAIInferenceClient(InferenceClient):
     def __init__(
         self,
