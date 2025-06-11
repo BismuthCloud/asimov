@@ -1005,7 +1005,6 @@ class AnthropicInferenceClient(InferenceClient):
                     else:
                         logger.warning("Unknown message type from Anthropic stream.")
 
-                print(current_content)
                 return current_content
 
 
@@ -1951,7 +1950,6 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                 timeout=60,
             ) as response:
                 if response.status_code == 400:
-                    print(request)
                     raise ValueError(await response.aread())
                 elif response.status_code != 200:
                     raise InferenceException(await response.aread())
@@ -1966,7 +1964,6 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                         return ([text_block] if text_block else []) + tool_call_blocks
                     if line.startswith("data: "):
                         data = json.loads(line[6:])
-                        print(data)
                         if "id" in data:
                             id = data["id"]
                         if data.get("error"):
