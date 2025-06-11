@@ -1945,6 +1945,7 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                                     pass
 
 
+
 class VertexInferenceClient(InferenceClient):
     def __init__(self, model: str):
         super().__init__()
