@@ -151,7 +151,7 @@ class InferenceClient(ABC):
     async def tool_chain(
         self,
         messages: List[ChatMessage],
-        tools: List[Tuple[Callable, Dict[str, Any]]],
+        tools: List[Tuple[Callable, Dict[str, Any]]] = [],
         max_tokens=1024,
         top_p=0.9,
         temperature=0.5,
@@ -165,19 +165,24 @@ class InferenceClient(ABC):
             ]
         ] = None,
         fifo_ratio: Optional[float] = None,
+        tool_parser: Optional[Callable[[str, ...], list[Callable[[any], str]]]] = None,
+        tool_result_reducer: Optional[Callable[[list[dict[str, Any]]], str]] = None,
     ):
         mode = None
         if mode_swap_callback:
             _, _, mode = await mode_swap_callback()
 
-        last_mode_cached_message: dict[Hashable, int] = {}
+        if tool_parser and not tool_result_reducer:
+            raise ValueError(
+                "If tool_parser is set then tool_result_reducer must be set."
+            )
 
-        tools[-1][1]["cache_control"] = {"type": "ephemeral"}
+        last_mode_cached_message: dict[Hashable, int] = {}
 
         tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
         system = None
-        if messages[0].role == ChatRole.SYSTEM:
+        if messages[0].role == ChatRole.SYSTEM and not tool_parser:
             system = messages[0].content
             messages = messages[1:]
 
@@ -189,11 +194,16 @@ class InferenceClient(ABC):
         for _ in range(max_iterations):
             for msg in serialized_messages:
                 msg["content"][-1].pop("cache_control", None)
+
+            for _, tool in tools:
+                tool.pop("cache_control", None)
+
             if mode_swap_callback and len(serialized_messages) > 2:
-                tools[-1][1].pop("cache_control", None)
                 prompt, tools, mode = await mode_swap_callback()
 
-                tools[-1][1]["cache_control"] = {"type": "ephemeral"}
+                if not tool_parser:
+                    tools[-1][1]["cache_control"] = {"type": "ephemeral"}
+
                 tool_funcs = {tool[1]["name"]: tool[0] for tool in tools}
 
                 if prompt:
@@ -254,23 +264,56 @@ class InferenceClient(ABC):
 
             for retry in range(1, 5):
                 try:
-                    resp = await self._tool_chain_stream(
-                        serialized_messages,
-                        tools,
-                        system=system,
-                        max_tokens=max_tokens,
-                        top_p=top_p,
-                        temperature=temperature,
-                        tool_choice=tool_choice,
-                        middlewares=middlewares,
-                    )
+                    if not tool_parser:
+                        resp = await self._tool_chain_stream(
+                            serialized_messages,
+                            tools,
+                            system=system,
+                            max_tokens=max_tokens,
+                            top_p=top_p,
+                            temperature=temperature,
+                            tool_choice=tool_choice,
+                            middlewares=middlewares,
+                        )
 
-                    if not resp:
-                        raise InferenceException("no response blocks returned")
+                        if not resp:
+                            raise InferenceException("no response blocks returned")
 
-                    calls = [c for c in resp if c["type"] == "tool_use"]
+                        calls = [c for c in resp if c["type"] == "tool_use"]
 
-                    await self._trace(serialized_messages, resp)
+                        await self._trace(serialized_messages, resp)
+                    else:
+                        buf = ""
+                        calls = None
+
+                        # this is a little dumb since we serialize them above, but we do the caching updates so whatever
+                        unserialized_messages = [
+                            ChatMessage(
+                                role=ChatRole(msg["role"]),
+                                content=msg["content"][0]["text"],
+                                cache_marker=msg["content"][0]
+                                .get("cache_control", {})
+                                .get("type", None)
+                                == "ephemeral",
+                            )
+                            for msg in serialized_messages
+                        ]
+
+                        async for token in self.connect_and_listen(
+                            unserialized_messages,
+                            max_tokens=max_tokens,
+                            top_p=top_p,
+                            temperature=temperature,
+                        ):
+                            buf += token
+
+                            calls = await tool_parser(buf, mode)
+
+                        if type(calls) is not list:
+                            calls = [calls]
+
+                        resp = [{"type": "text", "text": buf}]
+
                     break
                 except ContextLengthExceeded as e:
                     logger.info("Non-retryable exception hit (context length), bailing")
@@ -280,6 +323,9 @@ class InferenceClient(ABC):
                     raise
                 except ValueError as e:
                     logger.info(f"ValueError hit ({e}), bailing")
+                    import traceback
+
+                    traceback.print_exc()
                     return serialized_messages
                 except InferenceException as e:
                     logger.info("inference exception %s", e)
@@ -331,13 +377,26 @@ class InferenceClient(ABC):
                 except StopAsyncIteration:
                     return serialized_messages
 
-                content_blocks.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": call["id"],
-                        "content": str(result),
-                    }
-                )
+                if tool_parser:
+                    content_blocks.append(
+                        {
+                            "type": "text",
+                            "content": str(result),
+                        }
+                    )
+                else:
+                    content_blocks.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": call["id"],
+                            "content": str(result),
+                        }
+                    )
+
+            if tool_parser and tool_result_reducer:
+                content_blocks = [
+                    {"type": "text", "text": tool_result_reducer(calls, content_blocks)}
+                ]
 
             serialized_messages.append(
                 {
@@ -631,7 +690,7 @@ class AnthropicInferenceClient(InferenceClient):
                 headers={
                     "x-api-key": self.api_key,
                     "anthropic-version": "2023-06-01",
-                    "anthropic-beta": "prompt-caching-2024-07-31,output-128k-2025-02-19",
+                    "anthropic-beta": "output-128k-2025-02-19",
                 },
             )
 
@@ -644,7 +703,7 @@ class AnthropicInferenceClient(InferenceClient):
             headers={
                 "x-api-key": self.api_key,
                 "anthropic-version": "2023-06-01",
-                "anthropic-beta": "prompt-caching-2024-07-31,output-128k-2025-02-19",
+                "anthropic-beta": "output-128k-2025-02-19,interleaved-thinking-2025-05-14",
             },
         )
 
@@ -859,6 +918,8 @@ class AnthropicInferenceClient(InferenceClient):
             ) as response:
                 if response.status_code == 400:
                     raise ValueError(await response.aread())
+                elif response.status_code == 413:
+                    raise ContextLengthExceeded(await response.aread())
                 elif response.status_code != 200:
                     raise InferenceException(await response.aread())
 
@@ -1353,6 +1414,12 @@ class OAIInferenceClient(InferenceClient):
                 stream=False,
             ).model_dump(exclude={"stream_options", "tools", "tool_choice"})
 
+        if "o3" in self.model or "o4" in self.model:
+            del request["temperature"]
+            del request["top_p"]
+            del request["max_tokens"]
+            request["reasoning_effort"] = "high"
+
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 self.api_url,
@@ -1413,6 +1480,12 @@ class OAIInferenceClient(InferenceClient):
             stream_options={"include_usage": True},
         ).model_dump(exclude={"tools", "tool_choice"})
 
+        if "o3" in self.model or "o4" in self.model:
+            del request["temperature"]
+            del request["top_p"]
+            del request["max_tokens"]
+            request["reasoning_effort"] = "high"
+
         async with httpx.AsyncClient() as client:
             async with client.stream(
                 "POST",
@@ -1447,14 +1520,17 @@ class OAIInferenceClient(InferenceClient):
                         elif data.get("usage"):
                             self._cost.input_tokens += data["usage"]["prompt_tokens"]
                             # No reference to cached tokens in the docs for the streaming API response objects...
-                            self._cost.cache_read_input_tokens += (
-                                data["usage"]
-                                .get("prompt_tokens_details", {})
-                                .get("cached_tokens", 0)
-                            )
-                            self._cost.output_tokens += data["usage"][
-                                "completion_tokens"
-                            ]
+                            try:
+                                self._cost.cache_read_input_tokens += (
+                                    data["usage"]
+                                    .get("prompt_tokens_details", {})
+                                    .get("cached_tokens", 0)
+                                )
+                                self._cost.output_tokens += data["usage"][
+                                    "completion_tokens"
+                                ]
+                            except AttributeError as e:
+                                logger.warning(f"Malformed usage? {repr(data)}")
 
                 await self._trace(
                     request["messages"],
@@ -1565,6 +1641,13 @@ class OAIInferenceClient(InferenceClient):
 
         request = request.__dict__
 
+        if "o3" in self.model or "o4" in self.model:
+            del request["temperature"]
+            del request["top_p"]
+            del request["max_tokens"]
+            request["reasoning_effort"] = "high"
+            request["tool_choice"] = "required"
+
         async with httpx.AsyncClient() as client:
             async with client.stream(
                 "POST",
@@ -1577,7 +1660,7 @@ class OAIInferenceClient(InferenceClient):
                 },
             ) as response:
                 if response.status_code == 400:
-                    raise ValueError()
+                    raise ValueError(await response.aread())
                 elif response.status_code != 200:
                     raise InferenceException(await response.aread())
 
@@ -1610,22 +1693,18 @@ class OAIInferenceClient(InferenceClient):
                                             "input": {},
                                         }
                                     )
-                                tool_call_blocks[int(tc["id"])]["raw_input"] += tc[
+                                tool_call_blocks[tc["index"]]["raw_input"] += tc[
                                     "function"
                                 ]["arguments"]
                                 try:
-                                    tool_call_blocks[int(tc["id"])]["input"] = (
+                                    tool_call_blocks[tc["index"]]["input"] = (
                                         pydantic_core.from_json(
-                                            tool_call_blocks[int(tc["id"])][
-                                                "raw_input"
-                                            ],
+                                            tool_call_blocks[tc["index"]]["raw_input"],
                                             allow_partial=True,
                                         )
                                     )
                                     for middleware in middlewares:
-                                        await middleware(
-                                            tool_call_blocks[int(tc["id"])]
-                                        )
+                                        await middleware(tool_call_blocks[tc["index"]])
                                 except ValueError:
                                     pass
                         if data.get("usage"):
@@ -1792,9 +1871,6 @@ class OpenRouterInferenceClient(OAIInferenceClient):
 
         if self.model in ["openai/o3-mini"]:
             request["reasoning_effort"] = "high"
-
-        if self.model in ["anthropic/claude-3.7-sonnet"]:
-            request["include_reasoning"] = True
 
         async with httpx.AsyncClient() as client:
             async with client.stream(
