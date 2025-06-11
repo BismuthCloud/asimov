@@ -1225,10 +1225,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
 
         tool_config = {"function_calling_config": {"mode": tool_choice.upper()}}
 
-        if self.model == "gemini-2.0-flash-exp":
-            await asyncio.sleep(6.5)
-
-        request = self.client.aio.models.generate_content_stream(
+        request = await self.client.aio.models.generate_content_stream(
             model=self.model,
             contents=processed_messages,
             config=types.GenerateContentConfig(
