@@ -165,8 +165,8 @@ class InferenceClient(ABC):
             ]
         ] = None,
         fifo_ratio: Optional[float] = None,
-        tool_parser: Optional[Callable[[str, ...], list[Callable[[any], str]]]] = None,
-        tool_result_reducer: Optional[Callable[[list[dict[str, Any]]], str]] = None,
+        tool_parser: Optional[Callable[[str, Hashable], Awaitable[list[dict[str, Any]]]]] = None,
+        tool_result_reducer: Optional[Callable[[list, list], str]] = None,
     ):
         mode = None
         if mode_swap_callback:
@@ -310,7 +310,7 @@ class InferenceClient(ABC):
                             calls = await tool_parser(buf, mode)
 
                         if type(calls) is not list:
-                            calls = [calls]
+                            calls = [calls]  # type: ignore
 
                         resp = [{"type": "text", "text": buf}]
 
