@@ -1053,10 +1053,10 @@ class GoogleAnthropicInferenceClient(AnthropicInferenceClient):
         self._get_token()
 
     def _get_token(self):
-        if not hasattr(self, "creds"):
-            import google.oauth2.id_token
-            import google.auth.transport.requests
+        import google.oauth2.id_token
+        import google.auth.transport.requests
 
+        if not hasattr(self, "creds"):
             self.creds, self.project_id = google.auth.default(
                 scopes=["https://www.googleapis.com/auth/cloud-platform"]
             )
