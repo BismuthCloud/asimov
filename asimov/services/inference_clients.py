@@ -14,11 +14,11 @@ import backoff
 import opentelemetry.instrumentation.httpx
 import opentelemetry.trace
 import pydantic_core
-import vertexai.generative_models
-import google.api_core.exceptions
+import google.auth
+import google.auth.transport.requests
 from google import genai
 from google.genai import types
-import google.auth
+
 
 from asimov.asimov_base import AsimovBase
 from asimov.utils.token_counter import approx_tokens_from_serialized_messages
@@ -165,7 +165,9 @@ class InferenceClient(ABC):
             ]
         ] = None,
         fifo_ratio: Optional[float] = None,
-        tool_parser: Optional[Callable[[str, Hashable], Awaitable[list[dict[str, Any]]]]] = None,
+        tool_parser: Optional[
+            Callable[[str, Hashable], Awaitable[list[dict[str, Any]]]]
+        ] = None,
         tool_result_reducer: Optional[Callable[[list, list], str]] = None,
     ):
         mode = None
@@ -328,7 +330,7 @@ class InferenceClient(ABC):
                     traceback.print_exc()
                     return serialized_messages
                 except InferenceException as e:
-                    logger.info("inference exception %s", e)
+                    logger.info("inference exception %s", e, exc_info=True)
                     await asyncio.sleep(3**retry)
                     if retry > 3:
                         # Modify messages to try and cache bust in case we have a poison message or similar
@@ -1053,9 +1055,6 @@ class GoogleAnthropicInferenceClient(AnthropicInferenceClient):
         self._get_token()
 
     def _get_token(self):
-        import google.oauth2.id_token
-        import google.auth.transport.requests
-
         if not hasattr(self, "creds"):
             self.creds, self.project_id = google.auth.default(
                 scopes=["https://www.googleapis.com/auth/cloud-platform"]
@@ -1100,10 +1099,14 @@ class GoogleGenAIInferenceClient(InferenceClient):
     def __init__(
         self,
         model: str,
-        api_key: str,
+        api_key: Optional[str] = None,
+        **kwargs,
     ):
         super().__init__()
-        self.client = genai.Client(api_key=api_key)
+        if api_key:
+            self.client = genai.Client(api_key=api_key)
+        else:
+            self.client = genai.Client(**kwargs)
         self.model = model
 
     @tracer.start_as_current_span(name="GoogleGenAIInferenceClient._tool_chain_stream")
@@ -1164,14 +1167,15 @@ class GoogleGenAIInferenceClient(InferenceClient):
                 "description": tool_schema["description"],
             }
 
-            if (
-                parameters
-                and parameters["type"] == "OBJECT"
-                and parameters["properties"] != {}
-                or parameters
-                and parameters["type"] != "OBJECT"
-            ):
-                function_declaration["parameters"] = parameters
+            # vertexai mode doesn't support tools with no params (400s)
+            if not parameters:
+                parameters = {
+                    "type": "OBJECT",
+                    "properties": {},
+                    "required": [],
+                }
+
+            function_declaration["parameters"] = parameters
 
             filtered_tools.append((tool[0], function_declaration))
 
@@ -1225,7 +1229,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
 
         tool_config = {"function_calling_config": {"mode": tool_choice.upper()}}
 
-        request = await self.client.aio.models.generate_content_stream(
+        resp = await self.client.aio.models.generate_content_stream(
             model=self.model,
             contents=processed_messages,
             config=types.GenerateContentConfig(
@@ -1245,7 +1249,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
             tool_call_blocks = []
 
             # Should be able to handle streaming directly without thread pool
-            async for chunk in request:
+            async for chunk in resp:
                 if chunk.candidates:
                     for part in chunk.candidates[0].content.parts:
                         if function_call := part.function_call:
@@ -1943,116 +1947,3 @@ class OpenRouterInferenceClient(OAIInferenceClient):
                                         await middleware(tool_call_blocks[tc["index"]])
                                 except ValueError:
                                     pass
-
-
-class VertexInferenceClient(InferenceClient):
-    def __init__(self, model: str):
-        super().__init__()
-        self.model = model
-
-    @tracer.start_as_current_span(name="VertexInferenceClient.get_generation")
-    @backoff.on_exception(backoff.expo, InferenceException, max_time=60)
-    async def get_generation(
-        self,
-        messages: List[ChatMessage],
-        max_tokens=4096,
-        top_p=0.9,
-        temperature=0.5,
-        schema=None,
-    ):
-        if messages[0].role == ChatRole.SYSTEM:
-            model = vertexai.generative_models.GenerativeModel(
-                self.model, system_instruction=messages[0].content
-            )
-            messages = messages[1:]
-        else:
-            model = vertexai.generative_models.GenerativeModel(self.model)
-
-        prefill = ""
-        if schema and messages[-1].role == ChatRole.ASSISTANT:
-            prefill = messages[-1].content
-            messages = messages[:-1]
-
-        try:
-            resp = await model.generate_content_async(
-                [
-                    vertexai.generative_models.Content(
-                        role=msg.role.value,
-                        parts=[vertexai.generative_models.Part.from_text(msg.content)],
-                    )
-                    for msg in messages
-                ],
-                generation_config=vertexai.generative_models.GenerationConfig(
-                    max_output_tokens=max_tokens,
-                    top_p=top_p,
-                    temperature=temperature,
-                    response_mime_type="application/json" if schema else None,
-                    response_schema=schema,
-                ),
-            )
-            if schema:
-                resp.text = resp.text[len(prefill) :]
-        except google.api_core.exceptions.TooManyRequests:
-            raise InferenceException("backoff")
-        except google.api_core.exceptions.BadRequest:
-            raise ValueError()
-        except google.api_core.exceptions.ServerError:
-            raise InferenceException("server_error")
-
-        self._cost.input_tokens += resp.usage_metadata.prompt_token_count
-        self._cost.output_tokens += resp.usage_metadata.candidates_token_count
-
-        await self._trace(
-            [
-                {
-                    "role": msg.role.value,
-                    "content": [{"text": msg.content}],
-                }
-                for msg in messages
-            ],
-            [{"text": resp.text}],
-        )
-        return resp.text
-
-    @tracer.start_as_current_span(name="VertexInferenceClient.connect_and_listen")
-    async def connect_and_listen(
-        self, messages: List[ChatMessage], max_tokens=4096, top_p=0.9, temperature=0.5
-    ):
-        if messages[0].role == ChatRole.SYSTEM:
-            model = vertexai.generative_models.GenerativeModel(
-                self.model, system_instruction=messages[0].content
-            )
-            messages = messages[1:]
-        else:
-            model = vertexai.generative_models.GenerativeModel(self.model)
-
-        out = ""
-        async for chunk in model.generate_content_async(
-            [
-                vertexai.generative_models.Content(
-                    role=msg.role.value,
-                    parts=[vertexai.generative_models.Part.from_text(msg.content)],
-                )
-                for msg in messages
-            ],
-            generation_config=vertexai.generative_models.GenerationConfig(
-                max_output_tokens=max_tokens, top_p=top_p, temperature=temperature
-            ),
-            stream=True,
-        ):
-            out += chunk.text
-            yield chunk.text
-            if chunk.usage_metadata:
-                self._cost.input_tokens += chunk.usage_metadata.prompt_token_count
-                self._cost.output_tokens += chunk.usage_metadata.candidates_token_count
-
-        await self._trace(
-            [
-                {
-                    "role": msg.role.value,
-                    "content": [{"text": msg.content}],
-                }
-                for msg in messages
-            ],
-            [{"text": out}],
-        )
