@@ -1181,49 +1181,37 @@ class GoogleGenAIInferenceClient(InferenceClient):
 
         # Process messages to match Google's format
         processed_messages = []
-        for message in serialized_messages:
-            if (
-                message["role"] == "user"
-                and isinstance(message["content"], list)
-                and message["content"][0]["type"] == "tool_result"
-            ):
-                # Handle tool result responses
-                processed_message = types.Content(
-                    role=message["role"],
-                    parts=[
+        for i, message in enumerate(serialized_messages):
+            assert isinstance(message["content"], list)
+            parts = []
+            for part in message["content"]:
+                if part["type"] == "text":
+                    parts.append(types.Part(text=part["text"]))
+                elif part["type"] == "tool_use":
+                    parts.append(
                         types.Part(
-                            function_response=types.FunctionResponse(
-                                name=message["content"][0]["tool_use_id"],
-                                response={"result": message["content"][0]["content"]},
+                            function_call=types.FunctionCall(
+                                id=part["id"],
+                                name=part["name"],
+                                args=part["input"],
                             )
                         )
-                    ],
-                )
-            else:
-                if isinstance(message["content"], list):
-                    tool_call = next(
-                        (c for c in message["content"] if c["type"] == "tool_use"), None
                     )
-                    if tool_call:
-                        processed_message = types.Content(
-                            role=message["role"],
-                            parts=[
-                                types.Part(
-                                    function_call=types.FunctionCall(
-                                        name=tool_call["name"],
-                                        args=dict(tool_call["input"]),
-                                    )
-                                )
-                            ],
+                elif part["type"] == "tool_result":
+                    parts.append(
+                        types.Part(
+                            function_response=types.FunctionResponse(
+                                id=part["tool_use_id"],
+                                name=next(p2 for p2 in serialized_messages[i-1]["content"] if p2["type"] == "tool_use")["name"],
+                                response={"result": part["content"]}, # docs conflict on whether to use "result" or "output" here
+                            )
                         )
-                    else:
-                        text_content = next(
-                            c["text"] for c in message["content"] if c["type"] == "text"
-                        )
-                        processed_message = types.Content(
-                            role=message["role"],
-                            parts=[types.Part(text=text_content)],
-                        )
+                    )
+
+                processed_message = types.Content(
+                    role=message["role"],
+                    parts=parts,
+                )
 
             processed_messages.append(processed_message)
 
@@ -1241,6 +1229,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
                 tools=[
                     types.Tool(function_declarations=[t[1]]) for t in filtered_tools
                 ],
+                thinking_config=types.ThinkingConfig(include_thoughts=True),
             ),
         )
 
@@ -1248,7 +1237,6 @@ class GoogleGenAIInferenceClient(InferenceClient):
             text_block = None
             tool_call_blocks = []
 
-            # Should be able to handle streaming directly without thread pool
             async for chunk in resp:
                 if chunk.candidates:
                     for part in chunk.candidates[0].content.parts:
@@ -1262,7 +1250,7 @@ class GoogleGenAIInferenceClient(InferenceClient):
 
                             tool_block = {
                                 "type": "tool_use",
-                                "id": str(len(tool_call_blocks)),
+                                "id": str(len(serialized_messages)) + "-" + str(len(tool_call_blocks)),
                                 "name": function_call.name,
                                 "input": args_dict,
                             }
